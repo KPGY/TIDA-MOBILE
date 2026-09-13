@@ -1,56 +1,59 @@
-# Welcome to your Expo app 👋
+# TIDA Mobile (안드로이드 React Native / Expo)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+> 데스크톱 어플리케이션 TIDA를 모바일(Android / iOS) 환경에 최적화하여 재탄생시킨 React Native (Expo) 프로젝트입니다.
 
-## Get started
+---
 
-1. Install dependencies
+## 📱 주요 화면 및 기능
 
+1. **타임라인 (Timeline / Diary)**
+   - 날짜별 빠른 생각/메모 기록
+   - 갤러리 사진 첨부 및 미리보기
+   - 전체 기록 검색 (`expo-sqlite` 기반 로컬 DB)
+   - 최신순 / 시간순 정렬 지원
+
+2. **투두 & 루틴 (Todos & Routines)**
+   - **오늘의 습관 루틴**: 요일별 반복 루틴, 불꽃(Flame) 연속 달성(Streak) 계산, 햅틱 피드백
+   - **할 일 목록**: 하위 서브 작업(Sub-todo) 지원, 달성률 퍼센트 자동 계산, 원클릭 완료 및 정리
+
+3. **통계 (Stats)**
+   - 오늘의 루틴 달성률 & 최고 연속 달성일수 집계
+   - 각 루틴별 최근 7일간의 실천 도트 매트릭스
+
+4. **설정 및 테마 커스터마이징 (Settings)**
+   - 모던 화이트, 다크 미드나잇, 라벤더, 포레스트 그린, 선셋 코랄 프리셋 테마
+   - 포인트 컬러 커스터마이징
+   - 데이터 초기화
+
+---
+
+## 🛠 기술 스택
+
+- **Framework**: Expo (React Native 0.86+, React 19)
+- **Routing**: Expo Router (File-based Tabs navigation)
+- **Database**: `expo-sqlite` (로컬 SQLite 데이터베이스)
+- **State Management**: `zustand` + `@react-native-async-storage/async-storage`
+- **Media**: `expo-image-picker`, `expo-file-system`
+- **Feedback**: `expo-haptics`
+- **Icons**: `lucide-react-native`
+
+---
+
+## 🚀 앱 실행 방법
+
+1. 의존성 확인 (이미 설치 완료됨)
    ```bash
-   npm install
+   cd tida-mobile
    ```
 
-2. Start the app
-
+2. 개발 서버 실행
    ```bash
    npx expo start
    ```
 
-In the output, you'll find options to open the app in a
+3. 실기기(스마트폰)에서 테스트:
+   - 안드로이드 폰의 **Google Play Store**에서 **Expo Go** 앱을 설치합니다.
+   - 터미널에 나타나는 QR 코드를 Expo Go 앱의 카메라로 스캔하면 폰에서 즉시 실행됩니다!
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-### Other setup steps
-
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+4. 안드로이드 에뮬레이터에서 실행 (설치되어 있는 경우):
+   - 터미널에서 `a` 키를 누르면 연결된 에뮬레이터에서 자동 실행됩니다.
