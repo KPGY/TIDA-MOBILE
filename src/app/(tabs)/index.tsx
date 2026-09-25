@@ -7,12 +7,12 @@ import {
   FlatList,
   Image,
   StyleSheet,
-  Alert,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   Modal,
+  Keyboard,
 } from 'react-native';
+import { showAlert } from '@/services/alert';
 import {
   ChevronLeft,
   ChevronRight,
@@ -22,10 +22,14 @@ import {
   Search,
   X,
   Calendar,
+  RotateCcw,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useAppStore } from '@/store/store';
+import { hexToRgba } from '@/utils/colorHelper';
+import { AppBackground } from '@/components/AppBackground';
+import { CalendarPickerModal } from '@/components/CalendarPickerModal';
 import {
   saveDiary,
   getDiaryByDate,
@@ -34,7 +38,7 @@ import {
   DiaryItem,
   Attachment,
 } from '@/services/db';
-import { getTodayStr } from '@/utils/routineHelper';
+import { getTodayStr, DAYS_LABEL } from '@/utils/routineHelper';
 
 export default function TimelineScreen() {
   const {
@@ -46,6 +50,7 @@ export default function TimelineScreen() {
     bubbleTextMode,
     panelTextMode,
     messageOrder,
+    glassmorphismMode,
   } = useAppStore();
 
   const [currentDate, setCurrentDate] = useState<string>(getTodayStr());
@@ -58,6 +63,9 @@ export default function TimelineScreen() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [searchResults, setSearchResults] = useState<DiaryItem[]>([]);
 
+  // Calendar modal state
+  const [isCalendarOpen, setIsCalendarOpen] = useState<boolean>(false);
+
   // Image preview modal
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
@@ -66,8 +74,17 @@ export default function TimelineScreen() {
   const isBgDark = bgTextMode === 'light';
   const textColor = isBgDark ? '#F8FAFC' : '#0F172A';
   const subTextColor = isBgDark ? '#94A3B8' : '#64748B';
-  const bubbleTextColor = bubbleTextMode === 'light' ? '#FFFFFF' : '#0F172A';
-  const bubbleSubTextColor = bubbleTextMode === 'light' ? 'rgba(255,255,255,0.7)' : 'rgba(15,23,42,0.6)';
+
+  const isBubbleDark = bubbleTextMode === 'light';
+  const bubbleTextColor = isBubbleDark ? '#FFFFFF' : '#0F172A';
+  const bubbleSubTextColor = isBubbleDark ? 'rgba(255,255,255,0.78)' : 'rgba(15,23,42,0.65)';
+
+  const isPanelDark = panelTextMode === 'light';
+  const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
+  const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
+
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
+  const bubbleBg = glassmorphismMode ? hexToRgba(bubbleTheme, 0.88) : bubbleTheme;
 
   // Load entries for current date
   const loadEntries = useCallback(() => {
@@ -89,8 +106,26 @@ export default function TimelineScreen() {
     loadEntries();
   }, [loadEntries]);
 
+  // 키보드가 올라올 때 최신 메시지 위치로 자동 스크롤
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const sub = Keyboard.addListener(showEvent, () => {
+      setTimeout(() => {
+        if (entries.length > 0 && flatListRef.current) {
+          if (messageOrder === 'bottom') {
+            flatListRef.current.scrollToEnd({ animated: true });
+          } else {
+            flatListRef.current.scrollToOffset({ offset: 0, animated: true });
+          }
+        }
+      }, 100);
+    });
+    return () => sub.remove();
+  }, [entries.length, messageOrder]);
+
   // Date Navigation
   const changeDate = (offset: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const parts = currentDate.split('-').map(Number);
     const d = new Date(parts[0], parts[1] - 1, parts[2]);
     d.setDate(d.getDate() + offset);
@@ -98,7 +133,18 @@ export default function TimelineScreen() {
   };
 
   const jumpToToday = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCurrentDate(getTodayStr());
+  };
+
+  const getDayLabel = (dateStr: string) => {
+    try {
+      const parts = dateStr.split('-').map(Number);
+      const d = new Date(parts[0], parts[1] - 1, parts[2]);
+      return DAYS_LABEL[d.getDay()];
+    } catch (e) {
+      return '';
+    }
   };
 
   // Image Pick
@@ -114,7 +160,7 @@ export default function TimelineScreen() {
         setSelectedImage(result.assets[0].uri);
       }
     } catch (error) {
-      Alert.alert('사진 선택 오류', '갤러리에서 사진을 불러오는 중 오류가 발생했습니다.');
+      showAlert('사진 선택 오류', '갤러리에서 사진을 불러오는 중 오류가 발생했습니다.');
     }
   };
 
@@ -143,14 +189,23 @@ export default function TimelineScreen() {
       setInputText('');
       setSelectedImage(null);
       loadEntries();
+      setTimeout(() => {
+        if (flatListRef.current) {
+          if (messageOrder === 'bottom') {
+            flatListRef.current.scrollToEnd({ animated: true });
+          } else {
+            flatListRef.current.scrollToOffset({ offset: 0, animated: true });
+          }
+        }
+      }, 100);
     } catch (e) {
-      Alert.alert('저장 실패', '메모를 저장하지 못했습니다.');
+      showAlert('저장 실패', '메모를 저장하지 못했습니다.');
     }
   };
 
   // Delete Memo
   const handleDelete = (id: number) => {
-    Alert.alert('삭제 확인', '이 타임라인 기록을 삭제하시겠습니까?', [
+    showAlert('삭제 확인', '이 타임라인 기록을 삭제하시겠습니까?', [
       { text: '취소', style: 'cancel' },
       {
         text: '삭제',
@@ -164,7 +219,7 @@ export default function TimelineScreen() {
               handleSearch(searchQuery);
             }
           } catch (e) {
-            Alert.alert('삭제 오류', '기록을 삭제하지 못했습니다.');
+            showAlert('삭제 오류', '기록을 삭제하지 못했습니다.');
           }
         },
       },
@@ -195,9 +250,18 @@ export default function TimelineScreen() {
     }
 
     return (
-      <View style={[styles.bubbleContainer, { backgroundColor: bubbleTheme }]}>
+      <View style={[styles.bubbleContainer, { backgroundColor: bubbleBg }]}>
         <View style={styles.bubbleHeader}>
-          <Text style={[styles.bubbleTime, { color: bubbleSubTextColor }]}>
+          <Text
+            style={[
+              styles.bubbleTime,
+              {
+                color: bubbleSubTextColor,
+                textShadowColor: isBubbleDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.35)',
+                textShadowOffset: { width: 0, height: 0.5 },
+                textShadowRadius: 1,
+              },
+            ]}>
             {isSearching ? `${item.date} ${item.time}` : item.time}
           </Text>
           <TouchableOpacity
@@ -217,7 +281,18 @@ export default function TimelineScreen() {
         ))}
 
         {item.content ? (
-          <Text style={[styles.bubbleText, { color: bubbleTextColor }]}>{item.content}</Text>
+          <Text
+            style={[
+              styles.bubbleText,
+              {
+                color: bubbleTextColor,
+                textShadowColor: isBubbleDark ? 'rgba(0,0,0,0.32)' : 'rgba(255,255,255,0.4)',
+                textShadowOffset: { width: 0, height: 0.5 },
+                textShadowRadius: 1,
+              },
+            ]}>
+            {item.content}
+          </Text>
         ) : null}
       </View>
     );
@@ -226,19 +301,20 @@ export default function TimelineScreen() {
   const isToday = currentDate === getTodayStr();
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: bgTheme }]}>
+    <AppBackground style={styles.container}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}>
         {/* Top Header & Date Navigation */}
-        <View style={[styles.header, { backgroundColor: panelTheme }]}>
+        <View style={[styles.header, { backgroundColor: cardBg }]}>
           {isSearching ? (
             <View style={styles.searchBarContainer}>
-              <Search size={18} color={subTextColor} />
+              <Search size={18} color={cardSubTextColor} />
               <TextInput
-                style={[styles.searchInput, { color: textColor }]}
+                style={[styles.searchInput, { color: cardTextColor }]}
                 placeholder="타임라인 내용 검색..."
-                placeholderTextColor={subTextColor}
+                placeholderTextColor={cardSubTextColor}
                 value={searchQuery}
                 onChangeText={handleSearch}
                 autoFocus
@@ -249,33 +325,79 @@ export default function TimelineScreen() {
                   setSearchQuery('');
                   setSearchResults([]);
                 }}>
-                <X size={20} color={subTextColor} />
+                <X size={20} color={cardSubTextColor} />
               </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.dateNavRow}>
               <View style={styles.dateSelector}>
-                <TouchableOpacity onPress={() => changeDate(-1)} style={styles.navArrow}>
-                  <ChevronLeft size={22} color={textColor} />
+                <TouchableOpacity
+                  onPress={() => changeDate(-1)}
+                  style={styles.navArrow}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="이전 날짜">
+                  <ChevronLeft size={22} color={cardTextColor} />
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={jumpToToday} style={styles.dateTextButton}>
-                  <Text style={[styles.dateText, { color: textColor }]}>
+                <TouchableOpacity
+                  onPress={() => setIsCalendarOpen(true)}
+                  style={styles.dateTextButton}
+                  activeOpacity={0.7}
+                  accessibilityLabel="달력 열기">
+                  <Text style={[styles.dateText, { color: cardTextColor }]}>
                     {currentDate}
-                    {isToday && <Text style={{ color: mainTheme, fontWeight: '700' }}> (오늘)</Text>}
+                  </Text>
+                  <Text style={[styles.dayLabelText, { color: cardSubTextColor }]}>
+                    ({getDayLabel(currentDate)})
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={() => changeDate(1)} style={styles.navArrow}>
-                  <ChevronRight size={22} color={textColor} />
+                <TouchableOpacity
+                  onPress={() => changeDate(1)}
+                  style={styles.navArrow}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="다음 날짜">
+                  <ChevronRight size={22} color={cardTextColor} />
                 </TouchableOpacity>
               </View>
 
-              <TouchableOpacity
-                style={styles.searchIconButton}
-                onPress={() => setIsSearching(true)}>
-                <Search size={20} color={textColor} />
-              </TouchableOpacity>
+              <View style={styles.headerRightActions}>
+                {!isToday && (
+                  <TouchableOpacity
+                    style={[
+                      styles.todayButton,
+                      {
+                        backgroundColor: hexToRgba(mainTheme, 0.12),
+                        borderColor: hexToRgba(mainTheme, 0.3),
+                      },
+                    ]}
+                    onPress={jumpToToday}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    accessibilityLabel="오늘 날짜로 돌아가기">
+                    <RotateCcw size={12} color={mainTheme} style={{ marginRight: 4 }} />
+                    <Text style={[styles.todayButtonText, { color: mainTheme }]}>오늘</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={styles.headerIconButton}
+                  onPress={() => setIsCalendarOpen(true)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  accessibilityLabel="달력 열기">
+                  <Calendar size={20} color={cardTextColor} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.headerIconButton}
+                  onPress={() => setIsSearching(true)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  accessibilityLabel="검색 열기">
+                  <Search size={20} color={cardTextColor} />
+                </TouchableOpacity>
+              </View>
             </View>
           )}
         </View>
@@ -283,13 +405,25 @@ export default function TimelineScreen() {
         {/* Timeline Entries List */}
         <FlatList
           ref={flatListRef}
+          style={{ flex: 1 }}
           data={isSearching ? searchResults : entries}
           keyExtractor={(item) => String(item.id)}
           renderItem={renderDiaryItem}
           contentContainerStyle={styles.listContent}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Text style={[styles.emptyText, { color: subTextColor }]}>
+              <Text
+                style={[
+                  styles.emptyText,
+                  {
+                    color: subTextColor,
+                    textShadowColor: isBgDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.7)',
+                    textShadowOffset: { width: 0, height: 1 },
+                    textShadowRadius: 2,
+                  },
+                ]}>
                 {isSearching
                   ? '검색 결과가 없습니다.'
                   : '이 날짜에 작성된 기록이 없습니다.\n아래 입력창에 첫 생각을 남겨보세요 ✨'}
@@ -300,7 +434,7 @@ export default function TimelineScreen() {
 
         {/* Selected Image Thumbnail Preview */}
         {selectedImage && (
-          <View style={[styles.imagePreviewBar, { backgroundColor: panelTheme }]}>
+          <View style={[styles.imagePreviewBar, { backgroundColor: cardBg }]}>
             <Image source={{ uri: selectedImage }} style={styles.thumbnail} />
             <TouchableOpacity
               style={styles.removeImageBtn}
@@ -312,15 +446,15 @@ export default function TimelineScreen() {
 
         {/* Bottom Input Bar */}
         {!isSearching && (
-          <View style={[styles.inputBar, { backgroundColor: panelTheme }]}>
+          <View style={[styles.inputBar, { backgroundColor: cardBg }]}>
             <TouchableOpacity onPress={handlePickImage} style={styles.iconBtn}>
-              <ImageIcon size={22} color={selectedImage ? mainTheme : subTextColor} />
+              <ImageIcon size={22} color={selectedImage ? mainTheme : cardSubTextColor} />
             </TouchableOpacity>
 
             <TextInput
-              style={[styles.input, { color: textColor }]}
+              style={[styles.input, { color: cardTextColor }]}
               placeholder="지금 생각나는 것을 기록해보세요..."
-              placeholderTextColor={subTextColor}
+              placeholderTextColor={cardSubTextColor}
               value={inputText}
               onChangeText={setInputText}
               multiline
@@ -334,7 +468,7 @@ export default function TimelineScreen() {
                 styles.sendBtn,
                 {
                   backgroundColor:
-                    inputText.trim() || selectedImage ? mainTheme : isBgDark ? '#334155' : '#CBD5E1',
+                    inputText.trim() || selectedImage ? mainTheme : isPanelDark ? '#334155' : '#CBD5E1',
                 },
               ]}>
               <Send size={18} color="#FFFFFF" />
@@ -363,8 +497,16 @@ export default function TimelineScreen() {
             )}
           </View>
         </Modal>
+
+        {/* Calendar Picker Modal */}
+        <CalendarPickerModal
+          visible={isCalendarOpen}
+          currentDate={currentDate}
+          onSelectDate={(selected) => setCurrentDate(selected)}
+          onClose={() => setIsCalendarOpen(false)}
+        />
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </AppBackground>
   );
 }
 
@@ -389,16 +531,45 @@ const styles = StyleSheet.create({
   },
   navArrow: {
     padding: 6,
+    borderRadius: 16,
   },
   dateTextButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
   dateText: {
-    fontSize: 17,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  dayLabelText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  todayButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  todayButtonText: {
+    fontSize: 12,
     fontWeight: '700',
   },
-  searchIconButton: {
+  headerIconButton: {
     padding: 6,
+    borderRadius: 8,
   },
   searchBarContainer: {
     flexDirection: 'row',

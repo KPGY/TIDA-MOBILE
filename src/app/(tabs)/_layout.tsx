@@ -1,30 +1,13 @@
 import { Tabs } from 'expo-router';
 import { Clock, CheckSquare, BarChart2, Settings } from 'lucide-react-native';
-import { useAppStore } from '@/store/store';
-import { Platform } from 'react-native';
+import { FluidTabBar } from '@/components/FluidTabBar';
 
 export default function TabsLayout() {
-  const { mainTheme, panelTheme, panelTextMode } = useAppStore();
-  const isDark = panelTextMode === 'light';
-
   return (
     <Tabs
+      tabBar={(props) => <FluidTabBar {...props} />}
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: mainTheme,
-        tabBarInactiveTintColor: isDark ? '#94A3B8' : '#64748B',
-        tabBarStyle: {
-          backgroundColor: panelTheme,
-          borderTopColor: isDark ? '#334155' : '#E2E8F0',
-          borderTopWidth: 1,
-          height: Platform.OS === 'android' ? 64 : 80,
-          paddingBottom: Platform.OS === 'android' ? 10 : 25,
-          paddingTop: 8,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '600',
-        },
       }}>
       <Tabs.Screen
         name="index"

@@ -3,6 +3,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useAppStore } from '@/store/store';
 import { useEffect } from 'react';
 import { getDatabase } from '@/services/db';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { CustomAlertModal } from '@/components/CustomAlertModal';
 
 export default function RootLayout() {
   const { bgTextMode } = useAppStore();
@@ -17,11 +19,12 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <>
+    <SafeAreaProvider>
       <StatusBar style={bgTextMode === 'light' ? 'light' : 'dark'} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       </Stack>
-    </>
+      <CustomAlertModal />
+    </SafeAreaProvider>
   );
 }

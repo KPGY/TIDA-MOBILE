@@ -6,10 +6,9 @@ import {
   TouchableOpacity,
   ScrollView,
   StyleSheet,
-  Alert,
   Modal,
-  SafeAreaView,
 } from 'react-native';
+import { showAlert } from '@/services/alert';
 import {
   Plus,
   Check,
@@ -23,6 +22,8 @@ import {
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useAppStore, Todolist } from '@/store/store';
+import { hexToRgba } from '@/utils/colorHelper';
+import { AppBackground } from '@/components/AppBackground';
 import {
   RoutineItem,
   calculateStreak,
@@ -42,6 +43,7 @@ export default function TodoScreen() {
     mainTheme,
     bgTextMode,
     panelTextMode,
+    glassmorphismMode,
     todos,
     routines,
     addTodo,
@@ -72,7 +74,12 @@ export default function TodoScreen() {
   const isBgDark = bgTextMode === 'light';
   const textColor = isBgDark ? '#F8FAFC' : '#0F172A';
   const subTextColor = isBgDark ? '#94A3B8' : '#64748B';
-  const cardBg = panelTheme;
+
+  const isPanelDark = panelTextMode === 'light';
+  const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
+  const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
+
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
 
   const todayStr = getTodayStr();
 
@@ -113,13 +120,41 @@ export default function TodoScreen() {
   const toggleDaySelection = (dayIndex: number) => {
     if (routineDays.includes(dayIndex)) {
       if (routineDays.length === 1) {
-        Alert.alert('알림', '최소 하루 이상 선택해야 합니다.');
+        showAlert('알림', '최소 하루 이상 선택해야 합니다.');
         return;
       }
       setRoutineDays(routineDays.filter((d) => d !== dayIndex));
     } else {
       setRoutineDays([...routineDays, dayIndex].sort((a, b) => a - b));
     }
+  };
+
+  const confirmDeleteRoutine = (id: string, title: string) => {
+    showAlert('루틴 삭제', `'${title}' 루틴을 삭제하시겠습니까?`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: () => {
+          removeRoutine(id);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        },
+      },
+    ]);
+  };
+
+  const confirmDeleteTodo = (id: string, text: string) => {
+    showAlert('할 일 삭제', `'${text}' 항목을 삭제하시겠습니까?`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: () => {
+          removeTodo(id);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        },
+      },
+    ]);
   };
 
   const toggleAccordion = (id: string) => {
@@ -135,7 +170,7 @@ export default function TodoScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: bgTheme }]}>
+    <AppBackground style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* =========================================
             1. 습관 루틴 (Routines) Section
@@ -143,7 +178,18 @@ export default function TodoScreen() {
         <View style={styles.sectionHeader}>
           <View style={styles.sectionTitleRow}>
             <Flame size={20} color="#F97316" />
-            <Text style={[styles.sectionTitle, { color: textColor }]}>오늘의 루틴</Text>
+            <Text
+              style={[
+                styles.sectionTitle,
+                {
+                  color: textColor,
+                  textShadowColor: isBgDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.7)',
+                  textShadowOffset: { width: 0, height: 1 },
+                  textShadowRadius: 2,
+                },
+              ]}>
+              오늘의 루틴
+            </Text>
           </View>
           <TouchableOpacity
             style={[styles.addSmallBtn, { borderColor: mainTheme }]}
@@ -155,7 +201,7 @@ export default function TodoScreen() {
 
         {routines.length === 0 ? (
           <View style={[styles.emptyCard, { backgroundColor: cardBg }]}>
-            <Text style={[styles.emptyCardText, { color: subTextColor }]}>
+            <Text style={[styles.emptyCardText, { color: cardSubTextColor }]}>
               등록된 루틴이 없습니다.{'\n'}매일 실천할 작은 습관을 등록해보세요! 💧
             </Text>
           </View>
@@ -175,13 +221,18 @@ export default function TodoScreen() {
                       <Text
                         style={[
                           styles.routineTitle,
-                          { color: textColor },
+                          {
+                            color: cardTextColor,
+                            textShadowColor: isPanelDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.4)',
+                            textShadowOffset: { width: 0, height: 0.5 },
+                            textShadowRadius: 1,
+                          },
                           isDone && styles.completedText,
                         ]}>
                         {item.title}
                       </Text>
                       <View style={styles.routineMetaRow}>
-                        <Text style={[styles.routineDays, { color: subTextColor }]}>
+                        <Text style={[styles.routineDays, { color: cardSubTextColor }]}>
                           {formatRepeatDays(item.repeatDays)}
                         </Text>
                         {streak > 0 && (
@@ -199,14 +250,14 @@ export default function TodoScreen() {
                       onPress={() => handleToggleRoutine(item.id)}
                       style={[
                         styles.checkCircle,
-                        isDone ? { backgroundColor: mainTheme, borderColor: mainTheme } : { borderColor: subTextColor },
+                        isDone ? { backgroundColor: mainTheme, borderColor: mainTheme } : { borderColor: cardSubTextColor },
                       ]}>
                       {isDone && <Check size={16} color="#FFFFFF" />}
                     </TouchableOpacity>
                     <TouchableOpacity
-                      onPress={() => removeRoutine(item.id)}
+                      onPress={() => confirmDeleteRoutine(item.id, item.title)}
                       style={styles.deleteRoutineBtn}>
-                      <Trash2 size={16} color={subTextColor} />
+                      <Trash2 size={16} color={cardSubTextColor} />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -243,7 +294,7 @@ export default function TodoScreen() {
 
         {todos.length === 0 ? (
           <View style={[styles.emptyCard, { backgroundColor: cardBg }]}>
-            <Text style={[styles.emptyCardText, { color: subTextColor }]}>
+            <Text style={[styles.emptyCardText, { color: cardSubTextColor }]}>
               할 일이 없습니다.{'\n'}새로운 할 일을 추가하고 오늘 하루를 알차게 채워보세요! ✨
             </Text>
           </View>
@@ -260,12 +311,27 @@ export default function TodoScreen() {
                   {/* Main Todo Row */}
                   <View style={styles.todoMainRow}>
                     <TouchableOpacity
-                      onPress={() => handleToggleTodo(todo.id)}
+                      onPress={() => {
+                        if (totalSubs > 0) {
+                          if (!isExpanded) {
+                            toggleAccordion(todo.id);
+                          }
+                          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                          showAlert(
+                            '안내',
+                            todo.completed
+                              ? '하위 작업을 변경하여 완료 여부를 관리할 수 있습니다.'
+                              : '하위 작업을 모두 완료해야 메인 할 일이 완료됩니다.'
+                          );
+                          return;
+                        }
+                        handleToggleTodo(todo.id);
+                      }}
                       style={[
                         styles.checkCircle,
                         todo.completed
                           ? { backgroundColor: mainTheme, borderColor: mainTheme }
-                          : { borderColor: subTextColor },
+                          : { borderColor: cardSubTextColor },
                       ]}>
                       {todo.completed && <Check size={16} color="#FFFFFF" />}
                     </TouchableOpacity>
@@ -276,7 +342,12 @@ export default function TodoScreen() {
                       <Text
                         style={[
                           styles.todoTitle,
-                          { color: textColor },
+                          {
+                            color: cardTextColor,
+                            textShadowColor: isPanelDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.4)',
+                            textShadowOffset: { width: 0, height: 0.5 },
+                            textShadowRadius: 1,
+                          },
                           todo.completed && styles.completedText,
                         ]}>
                         {todo.content}
@@ -295,14 +366,14 @@ export default function TodoScreen() {
                       {totalSubs > 0 && (
                         <TouchableOpacity onPress={() => toggleAccordion(todo.id)}>
                           {isExpanded ? (
-                            <ChevronUp size={18} color={subTextColor} />
+                            <ChevronUp size={18} color={cardSubTextColor} />
                           ) : (
-                            <ChevronDown size={18} color={subTextColor} />
+                            <ChevronDown size={18} color={cardSubTextColor} />
                           )}
                         </TouchableOpacity>
                       )}
-                      <TouchableOpacity onPress={() => removeTodo(todo.id)}>
-                        <Trash2 size={16} color={subTextColor} />
+                      <TouchableOpacity onPress={() => confirmDeleteTodo(todo.id, todo.content)}>
+                        <Trash2 size={16} color={cardSubTextColor} />
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -318,14 +389,19 @@ export default function TodoScreen() {
                               styles.miniCheckCircle,
                               sub.completed
                                 ? { backgroundColor: mainTheme, borderColor: mainTheme }
-                                : { borderColor: subTextColor },
+                                : { borderColor: cardSubTextColor },
                             ]}>
                             {sub.completed && <Check size={12} color="#FFFFFF" />}
                           </TouchableOpacity>
                           <Text
                             style={[
                               styles.subTodoTitle,
-                              { color: textColor },
+                              {
+                                color: cardTextColor,
+                                textShadowColor: isPanelDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.4)',
+                                textShadowOffset: { width: 0, height: 0.5 },
+                                textShadowRadius: 1,
+                              },
                               sub.completed && styles.completedText,
                             ]}>
                             {sub.content}
@@ -336,9 +412,9 @@ export default function TodoScreen() {
                       {/* Add Inline Sub-Todo Input */}
                       <View style={styles.inlineSubInputRow}>
                         <TextInput
-                          style={[styles.inlineInput, { color: textColor }]}
+                          style={[styles.inlineInput, { color: cardTextColor }]}
                           placeholder="하위 작업 추가..."
-                          placeholderTextColor={subTextColor}
+                          placeholderTextColor={cardSubTextColor}
                           value={inlineSubText[todo.id] || ''}
                           onChangeText={(t) =>
                             setInlineSubText((prev) => ({ ...prev, [todo.id]: t }))
@@ -371,31 +447,40 @@ export default function TodoScreen() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: cardBg }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: textColor }]}>새 할 일 추가</Text>
+              <Text style={[styles.modalTitle, { color: cardTextColor }]}>새 할 일 추가</Text>
               <TouchableOpacity onPress={() => setIsTodoModalOpen(false)}>
-                <X size={22} color={textColor} />
+                <X size={22} color={cardTextColor} />
               </TouchableOpacity>
             </View>
 
             <TextInput
-              style={[styles.modalInput, { color: textColor, borderColor: 'rgba(0,0,0,0.1)' }]}
+              style={[
+                styles.modalInput,
+                {
+                  color: cardTextColor,
+                  borderColor: isPanelDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
+                },
+              ]}
               placeholder="할 일을 입력하세요..."
-              placeholderTextColor={subTextColor}
+              placeholderTextColor={cardSubTextColor}
               value={newTodoText}
               onChangeText={setNewTodoText}
               autoFocus
             />
 
-            <Text style={[styles.modalSubLabel, { color: subTextColor }]}>하위 작업 (선택)</Text>
+            <Text style={[styles.modalSubLabel, { color: cardSubTextColor }]}>하위 작업 (선택)</Text>
             {subTodoInputs.map((sub, idx) => (
               <View key={idx} style={styles.modalSubInputRow}>
                 <TextInput
                   style={[
                     styles.modalSubInput,
-                    { color: textColor, borderColor: 'rgba(0,0,0,0.08)' },
+                    {
+                      color: cardTextColor,
+                      borderColor: isPanelDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
+                    },
                   ]}
                   placeholder={`하위 항목 ${idx + 1}`}
-                  placeholderTextColor={subTextColor}
+                  placeholderTextColor={cardSubTextColor}
                   value={sub}
                   onChangeText={(val) => {
                     const next = [...subTodoInputs];
@@ -406,7 +491,7 @@ export default function TodoScreen() {
                 {subTodoInputs.length > 1 && (
                   <TouchableOpacity
                     onPress={() => setSubTodoInputs(subTodoInputs.filter((_, i) => i !== idx))}>
-                    <X size={18} color={subTextColor} />
+                    <X size={18} color={cardSubTextColor} />
                   </TouchableOpacity>
                 )}
               </View>
@@ -439,17 +524,23 @@ export default function TodoScreen() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: cardBg }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: textColor }]}>새 루틴 추가</Text>
+              <Text style={[styles.modalTitle, { color: cardTextColor }]}>새 루틴 추가</Text>
               <TouchableOpacity onPress={() => setIsRoutineModalOpen(false)}>
-                <X size={22} color={textColor} />
+                <X size={22} color={cardTextColor} />
               </TouchableOpacity>
             </View>
 
             {/* Title Input */}
             <TextInput
-              style={[styles.modalInput, { color: textColor, borderColor: 'rgba(0,0,0,0.1)' }]}
+              style={[
+                styles.modalInput,
+                {
+                  color: cardTextColor,
+                  borderColor: isPanelDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
+                },
+              ]}
               placeholder="루틴 이름 (예: 물 2L 마시기, 러닝)"
-              placeholderTextColor={subTextColor}
+              placeholderTextColor={cardSubTextColor}
               value={routineTitle}
               onChangeText={(text) => {
                 setRoutineTitle(text);
@@ -460,7 +551,7 @@ export default function TodoScreen() {
             />
 
             {/* Emoji Selector */}
-            <Text style={[styles.modalSubLabel, { color: subTextColor }]}>이모지 선택</Text>
+            <Text style={[styles.modalSubLabel, { color: cardSubTextColor }]}>이모지 선택</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -482,7 +573,7 @@ export default function TodoScreen() {
             </ScrollView>
 
             {/* Repeat Days Selector */}
-            <Text style={[styles.modalSubLabel, { color: subTextColor }]}>반복 요일</Text>
+            <Text style={[styles.modalSubLabel, { color: cardSubTextColor }]}>반복 요일</Text>
             <View style={styles.daysRow}>
               {DAYS_LABEL.map((label, idx) => {
                 const isSelected = routineDays.includes(idx);
@@ -492,12 +583,14 @@ export default function TodoScreen() {
                     onPress={() => toggleDaySelection(idx)}
                     style={[
                       styles.dayBtn,
-                      isSelected ? { backgroundColor: mainTheme } : { backgroundColor: 'rgba(0,0,0,0.06)' },
+                      isSelected
+                        ? { backgroundColor: mainTheme }
+                        : { backgroundColor: isPanelDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)' },
                     ]}>
                     <Text
                       style={[
                         styles.dayBtnText,
-                        isSelected ? { color: '#FFFFFF', fontWeight: '700' } : { color: subTextColor },
+                        isSelected ? { color: '#FFFFFF', fontWeight: '700' } : { color: cardSubTextColor },
                       ]}>
                       {label}
                     </Text>
@@ -514,7 +607,7 @@ export default function TodoScreen() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </AppBackground>
   );
 }
 

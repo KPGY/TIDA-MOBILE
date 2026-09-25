@@ -68,6 +68,20 @@ export function deleteDiary(id: number): void {
   database.runSync('DELETE FROM diary WHERE id = ?', [id]);
 }
 
+export function getRecordedDatesForMonth(yearMonth: string): string[] {
+  try {
+    const database = getDatabase();
+    const rows = database.getAllSync<{ date: string }>(
+      'SELECT DISTINCT date FROM diary WHERE date LIKE ?',
+      [`${yearMonth}%`],
+    );
+    return rows.map((r) => r.date);
+  } catch (e) {
+    console.error('Error fetching recorded dates for month:', e);
+    return [];
+  }
+}
+
 export function resetDiaryDatabase(): void {
   const database = getDatabase();
   database.execSync('DELETE FROM diary; VACUUM;');

@@ -1,7 +1,9 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Flame, CheckCircle2, Award, Calendar, TrendingUp } from 'lucide-react-native';
 import { useAppStore } from '@/store/store';
+import { hexToRgba } from '@/utils/colorHelper';
+import { AppBackground } from '@/components/AppBackground';
 import {
   calculateStreak,
   getRecentDaysStatus,
@@ -11,12 +13,16 @@ import {
 } from '@/utils/routineHelper';
 
 export default function StatsScreen() {
-  const { bgTheme, panelTheme, mainTheme, bgTextMode, routines, todos } = useAppStore();
+  const { bgTheme, panelTheme, mainTheme, bgTextMode, panelTextMode, glassmorphismMode, routines, todos } = useAppStore();
 
   const isBgDark = bgTextMode === 'light';
   const textColor = isBgDark ? '#F8FAFC' : '#0F172A';
   const subTextColor = isBgDark ? '#94A3B8' : '#64748B';
-  const cardBg = panelTheme;
+
+  const isPanelDark = panelTextMode === 'light';
+  const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
+  const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
 
   const todayStr = getTodayStr();
 
@@ -63,7 +69,7 @@ export default function StatsScreen() {
   }, [routines, todos, todayStr]);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: bgTheme }]}>
+    <AppBackground style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
           <Text style={[styles.headerTitle, { color: textColor }]}>달성 현황 및 통계</Text>
@@ -79,10 +85,19 @@ export default function StatsScreen() {
             <View style={[styles.iconCircle, { backgroundColor: 'rgba(59,130,246,0.1)' }]}>
               <TrendingUp size={20} color={mainTheme} />
             </View>
-            <Text style={[styles.metricValue, { color: textColor }]}>
+            <Text
+              style={[
+                styles.metricValue,
+                {
+                  color: cardTextColor,
+                  textShadowColor: isPanelDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.4)',
+                  textShadowOffset: { width: 0, height: 0.5 },
+                  textShadowRadius: 1,
+                },
+              ]}>
               {stats.routineCompletionRate}%
             </Text>
-            <Text style={[styles.metricLabel, { color: subTextColor }]}>오늘 루틴 달성</Text>
+            <Text style={[styles.metricLabel, { color: cardSubTextColor }]}>오늘 루틴 달성</Text>
             <Text style={[styles.metricDetail, { color: mainTheme }]}>
               {stats.completedTodayCount}/{stats.activeTodayCount} 완료
             </Text>
@@ -94,10 +109,10 @@ export default function StatsScreen() {
               <Flame size={20} color="#EA580C" />
             </View>
             <Text style={[styles.metricValue, { color: '#EA580C' }]}>{stats.maxStreak}일</Text>
-            <Text style={[styles.metricLabel, { color: subTextColor }]}>최고 연속 스트릭</Text>
+            <Text style={[styles.metricLabel, { color: cardSubTextColor }]}>최고 연속 스트릭</Text>
             <Text
               numberOfLines={1}
-              style={[styles.metricDetail, { color: subTextColor, fontSize: 11 }]}>
+              style={[styles.metricDetail, { color: cardSubTextColor, fontSize: 11 }]}>
               {stats.bestRoutineTitle || '진행 중'}
             </Text>
           </View>
@@ -107,10 +122,19 @@ export default function StatsScreen() {
             <View style={[styles.iconCircle, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
               <CheckCircle2 size={20} color="#10B981" />
             </View>
-            <Text style={[styles.metricValue, { color: textColor }]}>
+            <Text
+              style={[
+                styles.metricValue,
+                {
+                  color: cardTextColor,
+                  textShadowColor: isPanelDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.4)',
+                  textShadowOffset: { width: 0, height: 0.5 },
+                  textShadowRadius: 1,
+                },
+              ]}>
               {stats.completedTodos}개
             </Text>
-            <Text style={[styles.metricLabel, { color: subTextColor }]}>완료한 할 일</Text>
+            <Text style={[styles.metricLabel, { color: cardSubTextColor }]}>완료한 할 일</Text>
             <Text style={[styles.metricDetail, { color: '#10B981' }]}>
               달성률 {stats.todoCompletionRate}%
             </Text>
@@ -123,7 +147,7 @@ export default function StatsScreen() {
 
           {routines.length === 0 ? (
             <View style={[styles.emptyCard, { backgroundColor: cardBg }]}>
-              <Text style={[styles.emptyText, { color: subTextColor }]}>
+              <Text style={[styles.emptyText, { color: cardSubTextColor }]}>
                 등록된 루틴이 없습니다.
               </Text>
             </View>
@@ -138,7 +162,16 @@ export default function StatsScreen() {
                     <View style={styles.routineStatTop}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <Text style={{ fontSize: 24 }}>{routine.icon}</Text>
-                        <Text style={[styles.routineStatTitle, { color: textColor }]}>
+                        <Text
+                          style={[
+                            styles.routineStatTitle,
+                            {
+                              color: cardTextColor,
+                              textShadowColor: isPanelDark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.4)',
+                              textShadowOffset: { width: 0, height: 0.5 },
+                              textShadowRadius: 1,
+                            },
+                          ]}>
                           {routine.title}
                         </Text>
                       </View>
@@ -154,7 +187,7 @@ export default function StatsScreen() {
                     <View style={styles.dotsRow}>
                       {days.map((d, idx) => (
                         <View key={idx} style={styles.dotColumn}>
-                          <Text style={[styles.dotLabel, { color: subTextColor }]}>{d.label}</Text>
+                          <Text style={[styles.dotLabel, { color: cardSubTextColor }]}>{d.label}</Text>
                           <View
                             style={[
                               styles.dot,
@@ -163,10 +196,10 @@ export default function StatsScreen() {
                                 : d.isRequired
                                   ? {
                                       backgroundColor: 'transparent',
-                                      borderColor: 'rgba(0,0,0,0.2)',
+                                      borderColor: isPanelDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.2)',
                                       borderWidth: 1.5,
                                     }
-                                  : { backgroundColor: 'rgba(0,0,0,0.06)' },
+                                  : { backgroundColor: isPanelDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)' },
                             ]}
                           />
                         </View>
@@ -179,7 +212,7 @@ export default function StatsScreen() {
           )}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </AppBackground>
   );
 }
 

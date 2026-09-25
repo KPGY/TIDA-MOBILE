@@ -1,7 +1,11 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getContrastMode } from '../utils/colorHelper';
+import {
+  getContrastMode,
+  getAdaptiveBubbleTextMode,
+  getAdaptivePanelTextMode,
+} from '../utils/colorHelper';
 import { RoutineItem, SubRoutine } from '../utils/routineHelper';
 
 export function generateId(): string {
@@ -51,6 +55,8 @@ export interface SavedTheme {
   panelThemeEnd: string;
   mainThemeEnd: string;
   gradientMode: boolean;
+  glassmorphismMode?: boolean;
+  bgAttachmentPath?: string | null;
 }
 
 export type StartPageOption = 'home' | 'todo';
@@ -58,6 +64,9 @@ export type MessageOrderOption = 'top' | 'bottom';
 
 export interface AppState extends ThemeColors, GradientColors {
   gradientMode: boolean;
+  glassmorphismMode: boolean;
+  bgAttachmentPath: string | null;
+  bgOpacity: number; // 0.0 ~ 1.0 (배경 오버레이 투명도)
   startPage: StartPageOption;
   messageOrder: MessageOrderOption;
   bgTextMode: 'light' | 'dark';
@@ -71,6 +80,9 @@ export interface AppState extends ThemeColors, GradientColors {
   setSingleColor: (key: keyof ThemeColors, color: string) => void;
   setSingleGradientColor: (key: keyof GradientColors, color: string) => void;
   setGradientMode: (mode: boolean) => void;
+  setGlassmorphismMode: (mode: boolean) => void;
+  setbgAttachmentPath: (path: string | null) => void;
+  setBgOpacity: (opacity: number) => void;
   setStartPage: (page: StartPageOption) => void;
   setMessageOrder: (order: MessageOrderOption) => void;
   saveCurrentTheme: (name: string) => void;
@@ -141,13 +153,16 @@ export const useAppStore = create<AppState>()(
       ...defaultColors,
       ...defaultGradientColors,
       gradientMode: false,
+      glassmorphismMode: false,
+      bgAttachmentPath: null,
+      bgOpacity: 0.45,
       startPage: 'home',
       messageOrder: 'top',
       savedThemes: [],
       activeThemeId: null,
       bgTextMode: getContrastMode(defaultColors.bgTheme),
-      bubbleTextMode: getContrastMode(defaultColors.bubbleTheme),
-      panelTextMode: getContrastMode(defaultColors.panelTheme),
+      bubbleTextMode: getAdaptiveBubbleTextMode(defaultColors.bubbleTheme, defaultColors.bgTheme, false),
+      panelTextMode: getAdaptivePanelTextMode(defaultColors.panelTheme, defaultColors.bgTheme, false),
       mainTextMode: getContrastMode(defaultColors.mainTheme),
 
       todos: [],
@@ -159,8 +174,16 @@ export const useAppStore = create<AppState>()(
           return {
             ...updated,
             bgTextMode: getContrastMode(updated.bgTheme),
-            bubbleTextMode: getContrastMode(updated.bubbleTheme),
-            panelTextMode: getContrastMode(updated.panelTheme),
+            bubbleTextMode: getAdaptiveBubbleTextMode(
+              updated.bubbleTheme,
+              updated.bgTheme,
+              updated.glassmorphismMode,
+            ),
+            panelTextMode: getAdaptivePanelTextMode(
+              updated.panelTheme,
+              updated.bgTheme,
+              updated.glassmorphismMode,
+            ),
             mainTextMode: getContrastMode(updated.mainTheme),
           };
         });
@@ -171,6 +194,22 @@ export const useAppStore = create<AppState>()(
       },
 
       setGradientMode: (mode) => set({ gradientMode: mode }),
+      setGlassmorphismMode: (mode) =>
+        set((state) => ({
+          glassmorphismMode: mode,
+          bubbleTextMode: getAdaptiveBubbleTextMode(
+            state.bubbleTheme,
+            state.bgTheme,
+            mode,
+          ),
+          panelTextMode: getAdaptivePanelTextMode(
+            state.panelTheme,
+            state.bgTheme,
+            mode,
+          ),
+        })),
+      setbgAttachmentPath: (path) => set({ bgAttachmentPath: path }),
+      setBgOpacity: (opacity) => set({ bgOpacity: opacity }),
       setStartPage: (startPage) => set({ startPage }),
       setMessageOrder: (messageOrder) => set({ messageOrder }),
 
@@ -189,6 +228,8 @@ export const useAppStore = create<AppState>()(
           panelThemeEnd: state.panelThemeEnd,
           mainThemeEnd: state.mainThemeEnd,
           gradientMode: state.gradientMode,
+          glassmorphismMode: state.glassmorphismMode,
+          bgAttachmentPath: state.bgAttachmentPath,
         };
         set({
           savedThemes: [...state.savedThemes, newTheme],
@@ -199,6 +240,7 @@ export const useAppStore = create<AppState>()(
       applySavedTheme: (id) => {
         const target = get().savedThemes.find((t) => t.id === id);
         if (!target) return;
+        const isGlass = target.glassmorphismMode ?? false;
         set({
           bgTheme: target.bgTheme,
           bubbleTheme: target.bubbleTheme,
@@ -209,10 +251,12 @@ export const useAppStore = create<AppState>()(
           panelThemeEnd: target.panelThemeEnd,
           mainThemeEnd: target.mainThemeEnd,
           gradientMode: target.gradientMode,
+          glassmorphismMode: isGlass,
+          bgAttachmentPath: target.bgAttachmentPath ?? null,
           activeThemeId: target.id,
           bgTextMode: getContrastMode(target.bgTheme),
-          bubbleTextMode: getContrastMode(target.bubbleTheme),
-          panelTextMode: getContrastMode(target.panelTheme),
+          bubbleTextMode: getAdaptiveBubbleTextMode(target.bubbleTheme, target.bgTheme, isGlass),
+          panelTextMode: getAdaptivePanelTextMode(target.panelTheme, target.bgTheme, isGlass),
           mainTextMode: getContrastMode(target.mainTheme),
         });
       },
@@ -229,13 +273,16 @@ export const useAppStore = create<AppState>()(
           ...defaultColors,
           ...defaultGradientColors,
           gradientMode: false,
+          glassmorphismMode: false,
+          bgAttachmentPath: null,
+          bgOpacity: 0.45,
           startPage: 'home',
           messageOrder: 'top',
           savedThemes: [],
           activeThemeId: null,
           bgTextMode: getContrastMode(defaultColors.bgTheme),
-          bubbleTextMode: getContrastMode(defaultColors.bubbleTheme),
-          panelTextMode: getContrastMode(defaultColors.panelTheme),
+          bubbleTextMode: getAdaptiveBubbleTextMode(defaultColors.bubbleTheme, defaultColors.bgTheme, false),
+          panelTextMode: getAdaptivePanelTextMode(defaultColors.panelTheme, defaultColors.bgTheme, false),
           mainTextMode: getContrastMode(defaultColors.mainTheme),
           todos: [],
           routines: [],
@@ -289,14 +336,14 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           todos: state.todos.map((todo) => {
             if (todo.id === id) {
+              // 하위 투두가 있는 경우 메인 투두를 직접 클릭하여 완료할 수 없음 (하위 투두들의 완료 여부에 의해 결정)
+              if (todo.subTodos && todo.subTodos.length > 0) {
+                return todo;
+              }
               const nextStatus = !todo.completed;
               return {
                 ...todo,
                 completed: nextStatus,
-                subTodos: todo.subTodos.map((sub) => ({
-                  ...sub,
-                  completed: nextStatus,
-                })),
               };
             }
 
@@ -305,7 +352,7 @@ export const useAppStore = create<AppState>()(
               const updatedSubTodos = todo.subTodos.map((sub) =>
                 sub.id === id ? { ...sub, completed: !sub.completed } : sub,
               );
-              const allSubCompleted = updatedSubTodos.every((sub) => sub.completed);
+              const allSubCompleted = updatedSubTodos.length > 0 && updatedSubTodos.every((sub) => sub.completed);
               return {
                 ...todo,
                 subTodos: updatedSubTodos,
