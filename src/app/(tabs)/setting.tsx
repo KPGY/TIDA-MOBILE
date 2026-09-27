@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -24,6 +24,12 @@ import {
   Sliders,
   SlidersHorizontal,
   ChevronRight,
+  Cloud,
+  CloudUpload,
+  CloudDownload,
+  LogOut,
+  Key,
+  ShieldCheck,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppStore, ThemeColors, GradientColors, SavedTheme } from '@/store/store';
@@ -32,6 +38,19 @@ import { hexToRgba, getContrastMode } from '@/utils/colorHelper';
 import { generateThemeFromSingleColor, autoMatchColorsFromImage } from '@/utils/autoColorMatcher';
 import { AppBackground } from '@/components/AppBackground';
 import { ColorPickerModal } from '@/components/ColorPickerModal';
+import {
+  signInWithGoogle,
+  signOutGoogle,
+  getStoredGoogleUser,
+  getActiveClientId,
+  saveCustomClientId,
+  GoogleUser,
+} from '@/services/googleAuth';
+import {
+  addSyncListener,
+  performImmediateSync,
+  SyncStatus,
+} from '@/services/syncManager';
 
 interface PresetTheme {
   name: string;
@@ -271,6 +290,71 @@ export default function SettingScreen() {
     setThemeNameInput('');
     setSaveModalVisible(false);
     showAlert('저장 완료', `'${name}' 테마가 저장되었습니다.`);
+  };
+
+  // Google Drive 연동 및 자동 동기화 상태
+  const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const user = await getStoredGoogleUser();
+      setGoogleUser(user);
+    })();
+
+    const unsubscribe = addSyncListener((status, time) => {
+      setSyncStatus(status);
+      setLastSyncTime(time);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Google 로그인 핸들러
+  const handleGoogleLogin = async () => {
+    setIsGoogleLoading(true);
+    try {
+      const result = await signInWithGoogle();
+      if (result.success && result.user) {
+        setGoogleUser(result.user);
+        performImmediateSync(); // 연동 즉시 백그라운드 동기화 1회 실행
+      } else if (!result.cancelled && result.error) {
+        showAlert('로그인 실패', result.error);
+      }
+    } catch (err: any) {
+      showAlert('로그인 오류', err.message || '구글 로그인 중 문제가 발생했습니다.');
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
+
+  // Google 로그아웃 핸들러
+  const handleGoogleLogout = () => {
+    showAlert(
+      '연동 해제',
+      'Google 드라이브 자동 연동을 해제하시겠습니까?',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '해제',
+          style: 'destructive',
+          onPress: async () => {
+            await signOutGoogle();
+            setGoogleUser(null);
+          },
+        },
+      ],
+    );
+  };
+
+  // 수동 즉시 동기화 실행 (조용히 실행)
+  const handleManualSync = async () => {
+    if (syncStatus === 'syncing') return;
+    await performImmediateSync();
   };
 
   // 전체 데이터 초기화
@@ -758,7 +842,136 @@ export default function SettingScreen() {
         </View>
 
         {/* ====================================================
-            6. 데이터 초기화
+            6. 클라우드 연동 및 백업 (Google Drive)
+           ==================================================== */}
+        <View style={styles.section}>
+          <View style={styles.sectionTitleRow}>
+            <Cloud size={18} color={mainTheme} />
+            <Text style={[styles.sectionTitle, { color: textColor }]}>구글 드라이브 연동 & 백업</Text>
+          </View>
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+            {/* 구글 계정 상태 */}
+            {googleUser ? (
+              <View style={styles.googleUserRow}>
+                <View style={styles.googleUserInfo}>
+                  {googleUser.picture ? (
+                    <Image source={{ uri: googleUser.picture }} style={styles.googleAvatar} />
+                  ) : (
+                    <View style={[styles.googleAvatarFallback, { backgroundColor: mainTheme }]}>
+                      <Text style={styles.googleAvatarLetter}>
+                        {(googleUser.name || googleUser.email || 'G')[0].toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={[styles.googleUserName, { color: cardTextColor }]}>
+                        {googleUser.name}
+                      </Text>
+                      <View style={styles.connectedBadge}>
+                        <ShieldCheck size={12} color="#10B981" />
+                        <Text style={styles.connectedBadgeText}>연동됨</Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.googleUserEmail, { color: cardSubTextColor }]}>
+                      {googleUser.email}
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={[styles.disconnectBtn, { borderColor: isPanelDark ? '#334155' : '#E2E8F0' }]}
+                  onPress={handleGoogleLogout}
+                  activeOpacity={0.7}>
+                  <LogOut size={13} color="#EF4444" />
+                  <Text style={styles.disconnectBtnText}>해제</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.googleLoginCard}>
+                <Text style={[styles.cardDesc, { color: cardSubTextColor, marginBottom: 14, lineHeight: 18 }]}>
+                  Google Drive를 연동하여 PC 버전과 모바일 간에 타임라인(일기 및 사진), 투두, 루틴 데이터를 클라우드로 안전하게 백업 및 복원할 수 있습니다. (테마 및 개인 설정값은 기기별로 유지됩니다.)
+                </Text>
+                <TouchableOpacity
+                  style={[styles.googleLoginBtn, { backgroundColor: mainTheme }]}
+                  onPress={handleGoogleLogin}
+                  disabled={isGoogleLoading}
+                  activeOpacity={0.8}>
+                  {isGoogleLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Cloud size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                      <Text style={styles.googleLoginBtnText}>Google 계정으로 연동하기</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* 백업 및 복원 버튼 (연동된 경우 활성화) */}
+            {/* 자동 동기화 상태 영역 (연동된 경우 활성화) */}
+            {googleUser && (
+              <View style={[styles.driveActionsContainer, { borderTopColor: isPanelDark ? '#334155' : '#E2E8F0' }]}>
+                {/* 실시간 동기화 상태 뱃지 */}
+                <View style={[styles.syncStatusCard, { backgroundColor: isPanelDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)' }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                    {syncStatus === 'syncing' ? (
+                      <ActivityIndicator size="small" color={mainTheme} />
+                    ) : syncStatus === 'synced' ? (
+                      <Check size={16} color="#10B981" />
+                    ) : syncStatus === 'error' ? (
+                      <Text style={{ fontSize: 14 }}>⚠️</Text>
+                    ) : (
+                      <Cloud size={16} color={mainTheme} />
+                    )}
+                    <Text style={[styles.syncStatusTitle, { color: cardTextColor }]}>
+                      {syncStatus === 'syncing'
+                        ? '클라우드와 동기화 중...'
+                        : syncStatus === 'synced'
+                          ? '모든 데이터가 최신 상태입니다'
+                          : syncStatus === 'error'
+                            ? '동기화 일시 오류 (재시도 대기)'
+                            : '실시간 자동 동기화 활성화됨'}
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.manualSyncBtn, { borderColor: cardBorder }]}
+                    onPress={handleManualSync}
+                    disabled={syncStatus === 'syncing'}
+                    activeOpacity={0.7}>
+                    <RefreshCw
+                      size={13}
+                      color={syncStatus === 'syncing' ? cardSubTextColor : mainTheme}
+                    />
+                    <Text
+                      style={[
+                        styles.manualSyncBtnText,
+                        { color: syncStatus === 'syncing' ? cardSubTextColor : mainTheme },
+                      ]}>
+                      지금 동기화
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* 동기화 안내 및 마지막 동기화 시간 */}
+                <View style={styles.syncFooterRow}>
+                  <Text style={[styles.syncFooterText, { color: cardSubTextColor }]}>
+                    {lastSyncTime
+                      ? `마지막 동기화: ${new Date(lastSyncTime).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+                      : '동기화 대기 중'}
+                  </Text>
+                  <Text style={[styles.syncNoticeText, { color: cardSubTextColor }]}>
+                    타임라인, 사진, 투두, 루틴 자동 연동 중
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* ====================================================
+            7. 데이터 초기화
            ==================================================== */}
         <View style={styles.section}>
           <View style={styles.sectionTitleRow}>
@@ -1340,5 +1553,146 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  googleUserRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  googleUserInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+    marginRight: 10,
+  },
+  googleAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
+  googleAvatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleAvatarLetter: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  googleUserName: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  googleUserEmail: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  connectedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  connectedBadgeText: {
+    color: '#10B981',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  disconnectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  disconnectBtnText: {
+    color: '#EF4444',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  googleLoginCard: {
+    paddingVertical: 4,
+  },
+  googleLoginBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  googleLoginBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  driveActionsContainer: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+  },
+  syncStatusCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+  },
+  syncStatusTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  manualSyncBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  manualSyncBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  syncFooterRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+  },
+  syncFooterText: {
+    fontSize: 11,
+  },
+  syncNoticeText: {
+    fontSize: 11,
+  },
+  clientIdConfigRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  clientIdConfigText: {
+    fontSize: 12,
+    flex: 1,
+    marginLeft: 6,
   },
 });

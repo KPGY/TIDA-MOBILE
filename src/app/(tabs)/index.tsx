@@ -25,6 +25,7 @@ import {
   RotateCcw,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import { useAppStore } from '@/store/store';
 import { hexToRgba } from '@/utils/colorHelper';
@@ -39,6 +40,8 @@ import {
   Attachment,
 } from '@/services/db';
 import { getTodayStr, DAYS_LABEL } from '@/utils/routineHelper';
+import { useFocusEffect } from 'expo-router';
+import { triggerAutoSync, onSyncDataPulled } from '@/services/syncManager';
 
 export default function TimelineScreen() {
   const {
@@ -106,6 +109,21 @@ export default function TimelineScreen() {
     loadEntries();
   }, [loadEntries]);
 
+  // 탭 포커스 시 최신 일기 자동 리로드
+  useFocusEffect(
+    useCallback(() => {
+      loadEntries();
+    }, [loadEntries])
+  );
+
+  // 백그라운드 동기화 완료 시 실시간 타임라인 자동 갱신
+  useEffect(() => {
+    const unsub = onSyncDataPulled(() => {
+      loadEntries();
+    });
+    return unsub;
+  }, [loadEntries]);
+
   // 키보드가 올라올 때 최신 메시지 위치로 자동 스크롤
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -165,7 +183,7 @@ export default function TimelineScreen() {
   };
 
   // Save Memo
-  const handleSend = () => {
+  const handleSend = async () => {
     const trimmed = inputText.trim();
     if (!trimmed && !selectedImage) return;
 
@@ -174,17 +192,39 @@ export default function TimelineScreen() {
 
     let attachmentsJson: string | null = null;
     if (selectedImage) {
-      const attachments: Attachment[] = [
-        {
-          filePath: selectedImage,
-          fileName: selectedImage.split('/').pop() || 'image.jpg',
-        },
-      ];
-      attachmentsJson = JSON.stringify(attachments);
+      try {
+        const attDir = `${FileSystem.documentDirectory}attachments/`;
+        const dirInfo = await FileSystem.getInfoAsync(attDir);
+        if (!dirInfo.exists) {
+          await FileSystem.makeDirectoryAsync(attDir, { intermediates: true });
+        }
+        const ext = selectedImage.split('.').pop() || 'jpg';
+        const fileName = `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+        const targetPath = `${attDir}${fileName}`;
+        await FileSystem.copyAsync({ from: selectedImage, to: targetPath });
+
+        const attachments: Attachment[] = [
+          {
+            filePath: targetPath,
+            fileName: fileName,
+          },
+        ];
+        attachmentsJson = JSON.stringify(attachments);
+      } catch (err) {
+        console.warn('Failed to copy attachment permanently, fallback to original:', err);
+        const attachments: Attachment[] = [
+          {
+            filePath: selectedImage,
+            fileName: selectedImage.split('/').pop() || 'image.jpg',
+          },
+        ];
+        attachmentsJson = JSON.stringify(attachments);
+      }
     }
 
     try {
       saveDiary(trimmed, currentDate, timeStr, attachmentsJson);
+      triggerAutoSync();
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setInputText('');
       setSelectedImage(null);
@@ -213,6 +253,7 @@ export default function TimelineScreen() {
         onPress: () => {
           try {
             deleteDiary(id);
+            triggerAutoSync();
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             loadEntries();
             if (isSearching) {
