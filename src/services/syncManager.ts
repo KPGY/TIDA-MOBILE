@@ -1,5 +1,6 @@
+import { AppState } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
-import { getAllDiaries, mergeDiaries, DiaryItem, Attachment } from './db';
+import { getAllDiaries, restoreAllDiaries, mergeDiaries, DiaryItem, Attachment } from './db';
 import { useAppStore, Todolist } from '../store/store';
 import { RoutineItem } from '../utils/routineHelper';
 import {
@@ -216,9 +217,10 @@ async function executeUpload(): Promise<boolean> {
 
   const jsonContent = JSON.stringify(backupData, null, 2);
   const existingFile = await findBackupFile(accessToken);
+  let savedModifiedTime = nowIso;
 
   if (existingFile) {
-    const updateUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media`;
+    const updateUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media&fields=id,name,modifiedTime`;
     const res = await fetch(updateUrl, {
       method: 'PATCH',
       headers: {
@@ -228,6 +230,10 @@ async function executeUpload(): Promise<boolean> {
       body: jsonContent,
     });
     if (!res.ok) throw new Error(`Upload update failed: ${res.status}`);
+    const data = await res.json().catch(() => null);
+    if (data?.modifiedTime) {
+      savedModifiedTime = data.modifiedTime;
+    }
   } else {
     const boundary = 'tida_sync_' + Date.now();
     const metadata = JSON.stringify({
@@ -240,7 +246,7 @@ async function executeUpload(): Promise<boolean> {
       `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${jsonContent}\r\n` +
       `--${boundary}--`;
 
-    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime';
     const res = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
@@ -250,9 +256,13 @@ async function executeUpload(): Promise<boolean> {
       body: multipartBody,
     });
     if (!res.ok) throw new Error(`Upload create failed: ${res.status}`);
+    const data = await res.json().catch(() => null);
+    if (data?.modifiedTime) {
+      savedModifiedTime = data.modifiedTime;
+    }
   }
 
-  await setLastBackupTime(nowIso);
+  await setLastBackupTime(savedModifiedTime);
   return true;
 }
 
@@ -283,8 +293,30 @@ export function triggerAutoSync(delayMs = 2500) {
 }
 
 /**
+ * 대기 중인 디바운스 자동 동기화가 있다면 즉시 실행
+ * (앱이 백그라운드로 전환되거나 닫힐 때 변경사항 누락 완전 방지)
+ */
+export async function flushAutoSync(): Promise<void> {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+    try {
+      const user = await getStoredGoogleUser();
+      if (!user) return;
+      setStatus('syncing');
+      await executeUpload();
+      setStatus('synced');
+    } catch (err) {
+      console.warn('Flush auto-sync error:', err);
+      setStatus('error');
+    }
+  }
+}
+
+/**
  * 앱 시작 시 (또는 포커스 시) 실행되는 시작 동기화
- * (클라우드에 최신 데이터가 있으면 스마트하게 병합하고, 로컬 최신 데이터가 있으면 드라이브 갱신)
+ * 클라우드가 로컬보다 최신이면 클라우드 상태를 진실(Single Source of Truth)로 받아들여
+ * 로컬 데이터를 완전히 최신 상태로 갱신 (삭제/체크해제 등 완벽 반영)
  */
 export async function performStartupSync(): Promise<void> {
   try {
@@ -294,11 +326,10 @@ export async function performStartupSync(): Promise<void> {
     const accessToken = await getValidAccessToken();
     if (!accessToken) return;
 
-    setStatus('syncing');
-
     const file = await findBackupFile(accessToken);
     if (!file) {
       // 클라우드에 아직 파일이 없으면 현재 로컬 데이터를 최초 업로드
+      setStatus('syncing');
       await executeUpload();
       setStatus('synced');
       return;
@@ -308,8 +339,9 @@ export async function performStartupSync(): Promise<void> {
     const cloudModifiedTime = new Date(file.modifiedTime).getTime();
     const localSyncTime = localLastSync ? new Date(localLastSync).getTime() : 0;
 
-    // 클라우드가 로컬보다 최신이거나 첫 동기화인 경우 다운로드 & 병합
+    // 클라우드가 로컬보다 최신이거나 첫 동기화인 경우 다운로드 & 최신 상태로 갱신
     if (cloudModifiedTime > localSyncTime || localSyncTime === 0) {
+      setStatus('syncing');
       const downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
       const res = await fetch(downloadUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -320,31 +352,9 @@ export async function performStartupSync(): Promise<void> {
 
         isInternalSyncing = true;
         try {
-          // 1. 첨부 사진 복원
           const attDir = `${FileSystem.documentDirectory}attachments/`;
-          try {
-            const dirInfo = await FileSystem.getInfoAsync(attDir);
-            if (!dirInfo.exists) {
-              await FileSystem.makeDirectoryAsync(attDir, { intermediates: true });
-            }
-          } catch (_) {}
 
-          if (cloudData.attachments && typeof cloudData.attachments === 'object') {
-            for (const [fileName, base64] of Object.entries(cloudData.attachments)) {
-              if (!fileName || !base64) continue;
-              const targetPath = `${attDir}${fileName}`;
-              try {
-                const fInfo = await FileSystem.getInfoAsync(targetPath);
-                if (!fInfo.exists) {
-                  await FileSystem.writeAsStringAsync(targetPath, base64, {
-                    encoding: FileSystem.EncodingType.Base64,
-                  });
-                }
-              } catch (_) {}
-            }
-          }
-
-          // 2. 타임라인 일기 스마트 병합
+          // 1. 타임라인 일기 최신 상태로 복원 (클라우드에서 삭제된 글은 로컬에서도 완벽 제거)
           const remoteDiaries = Array.isArray(cloudData.diary) ? cloudData.diary : [];
           for (const item of remoteDiaries) {
             if (item.attachmentsJson) {
@@ -361,9 +371,7 @@ export async function performStartupSync(): Promise<void> {
               } catch (_) {}
             }
           }
-          mergeDiaries(remoteDiaries);
 
-          // 3. 투두 & 루틴 스마트 병합
           const rawData = cloudData as any;
           const remoteTodos = Array.isArray(cloudData.todos)
             ? cloudData.todos
@@ -376,30 +384,87 @@ export async function performStartupSync(): Promise<void> {
               ? rawData.settings.routines
               : [];
 
+          // 첫 연동(localSyncTime === 0)인데 로컬에도 기존 데이터가 있는 경우:
+          // 클라우드와 로컬을 합집합으로 병합하여 기존 로컬 데이터 유실 방지
+          const currentDiaries = getAllDiaries();
           const currentStore = useAppStore.getState();
-          const mergedTodos = mergeTodoList(currentStore.todos || [], remoteTodos);
-          const mergedRoutines = mergeRoutineList(currentStore.routines || [], remoteRoutines);
+          const currentTodos = currentStore.todos || [];
+          const currentRoutines = currentStore.routines || [];
+          const isInitialSyncWithLocalData =
+            localSyncTime === 0 &&
+            (currentDiaries.length > 0 || currentTodos.length > 0 || currentRoutines.length > 0);
 
-          useAppStore.setState((state) => ({
-            ...state,
-            todos: mergedTodos,
-            routines: mergedRoutines,
-          }));
+          if (isInitialSyncWithLocalData) {
+            // 1. 다이어리 합집합 병합
+            mergeDiaries(remoteDiaries);
 
-          await setLastBackupTime(file.modifiedTime);
+            // 2. 투두 & 루틴 스마트 병합
+            const mergedTodos = mergeTodoList(currentTodos, remoteTodos);
+            const mergedRoutines = mergeRoutineList(currentRoutines, remoteRoutines);
+
+            useAppStore.setState((state) => ({
+              ...state,
+              todos: mergedTodos,
+              routines: mergedRoutines,
+            }));
+
+            // 합본을 클라우드에 재업로드하여 양쪽 데이터 모두 보존
+            await executeUpload();
+          } else {
+            // 평상시 동기화: 클라우드 최신 스냅샷으로 100% 덮어쓰기 (삭제/체크해제 완벽 반영)
+            restoreAllDiaries(remoteDiaries);
+
+            useAppStore.setState((state) => ({
+              ...state,
+              todos: remoteTodos,
+              routines: remoteRoutines,
+            }));
+
+            await setLastBackupTime(file.modifiedTime);
+          }
+
+          // ★ [초고속 반영] 텍스트가 복원되었으므로 화면을 즉시 갱신 (0.2초 이내)
           notifySyncDataPulled();
+
+          // 3. 첨부 사진 복원은 백그라운드 비동기로 처리 (화면 블로킹 없음)
+          const remoteAttachments = cloudData.attachments;
+          if (remoteAttachments && typeof remoteAttachments === 'object') {
+            (async () => {
+              try {
+                const dirInfo = await FileSystem.getInfoAsync(attDir);
+                if (!dirInfo.exists) {
+                  await FileSystem.makeDirectoryAsync(attDir, { intermediates: true });
+                }
+                for (const [fileName, base64] of Object.entries(remoteAttachments)) {
+                  if (!fileName || !base64) continue;
+                  const targetPath = `${attDir}${fileName}`;
+                  const fInfo = await FileSystem.getInfoAsync(targetPath);
+                  if (!fInfo.exists) {
+                    await FileSystem.writeAsStringAsync(targetPath, base64, {
+                      encoding: FileSystem.EncodingType.Base64,
+                    });
+                  }
+                }
+                // 사진 파일 저장이 끝나면 타임라인 이미지 새로고침
+                notifySyncDataPulled();
+              } catch (attErr) {
+                console.warn('Background attachments download error:', attErr);
+              }
+            })();
+          }
         } finally {
           isInternalSyncing = false;
         }
 
-        // 스마트 병합 후 로컬의 기존 데이터와 클라우드 데이터가 합쳐진 전체 합집합을
-        // 즉시 클라우드에 다시 업로드하여, 기기 내 과거 데이터가 구글 드라이브에 누락 없이 반영되도록 보장
-        await executeUpload();
-        notifySyncDataPulled();
+        // 최신 클라우드 데이터를 내려받았으므로 불필요한 재업로드(executeUpload)는 생략
+        setStatus('synced');
+      } else {
+        setStatus('error');
       }
+    } else {
+      // 이미 로컬이 최신 상태인 경우 별도 작업 없음
+      setStatus('synced');
     }
-
-    setStatus('synced');
   } catch (err) {
     console.warn('Startup sync error:', err);
     setStatus('error');
@@ -441,3 +506,34 @@ export function initStoreSyncListener(): () => void {
     }
   });
 }
+
+/**
+ * 앱이 켜져 있는 동안 주기적으로(기본 3분) 상대 기기(PC 등)의 최신 변경사항을 확인하고 자동 동기화
+ * (앱이 화면에 표시되는 active 상태일 때만 동작하여 배터리/데이터 보존)
+ */
+export function startPeriodicSyncCheck(intervalMs = 180000): () => void {
+  const timer = setInterval(async () => {
+    if (AppState.currentState !== 'active') return;
+    if (isInternalSyncing || currentStatus === 'syncing') return;
+    try {
+      const user = await getStoredGoogleUser();
+      if (!user) return;
+      const accessToken = await getValidAccessToken();
+      if (!accessToken) return;
+
+      const file = await findBackupFile(accessToken);
+      if (!file) return;
+
+      const localLastSync = await getLastBackupTime();
+      const cloudModifiedTime = new Date(file.modifiedTime).getTime();
+      const localSyncTime = localLastSync ? new Date(localLastSync).getTime() : 0;
+
+      if (cloudModifiedTime > localSyncTime) {
+        await performStartupSync();
+      }
+    } catch (_) {}
+  }, intervalMs);
+
+  return () => clearInterval(timer);
+}
+
