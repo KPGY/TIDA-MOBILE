@@ -51,6 +51,7 @@ import {
   performImmediateSync,
   SyncStatus,
 } from '@/services/syncManager';
+import { clearMediaFolderCache } from '@/services/googleDrive';
 
 interface PresetTheme {
   name: string;
@@ -344,6 +345,7 @@ export default function SettingScreen() {
           style: 'destructive',
           onPress: async () => {
             await signOutGoogle();
+            clearMediaFolderCache(); // 계정 변경 시 미디어 폴더 캐시 초기화
             setGoogleUser(null);
           },
         },

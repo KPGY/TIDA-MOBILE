@@ -1,18 +1,34 @@
 import { AppState } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
-import { getAllDiaries, restoreAllDiaries, mergeDiaries, DiaryItem, Attachment } from './db';
+import {
+  getAllDiaries,
+  restoreAllDiaries,
+  mergeDiaries,
+  DiaryItem,
+  Attachment,
+  getDiaryKey,
+  getDeletedDiaryKeys,
+  recordDeletedDiaryKeys,
+  applyDeletionsByKeys,
+} from './db';
 import { useAppStore, Todolist } from '../store/store';
 import { RoutineItem } from '../utils/routineHelper';
 import {
-  getValidAccessToken,
+  getTokenWithRecovery,
   getStoredGoogleUser,
   getLastBackupTime,
   setLastBackupTime,
+  onSessionExpired,
 } from './googleAuth';
 import {
   findBackupFile,
   TidaCloudBackup,
   CloudFileInfo,
+  getOrCreateMediaFolder,
+  listMediaFilesInFolder,
+  uploadMediaFileToFolder,
+  downloadMediaFileFromDrive,
+  deleteMediaFileFromDrive,
 } from './googleDrive';
 import { GOOGLE_CONFIG } from '../constants/googleConfig';
 
@@ -23,6 +39,8 @@ type SyncListener = (status: SyncStatus, lastTime: string | null) => void;
 let currentStatus: SyncStatus = 'idle';
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let isInternalSyncing = false;
+let isSyncInProgress = false;
+let isInitialPullDone = false;
 const listeners = new Set<SyncListener>();
 
 function notifyListeners() {
@@ -84,123 +102,202 @@ export function getCurrentSyncStatus(): SyncStatus {
 }
 
 /**
- * 2개의 투두 목록 스마트 병합 (ID 기준)
+ * 2개의 투두 목록 스마트 양방향 병합 (updatedAt 및 삭제 톰스톤 반영)
  */
-function mergeTodoList(local: Todolist[], incoming: Todolist[]): Todolist[] {
+function mergeTodoList(
+  local: Todolist[],
+  incoming: Todolist[],
+  deletedIds: Set<string> = new Set(),
+): Todolist[] {
   const map = new Map<string, Todolist>();
-  local.forEach((t) => map.set(t.id, { ...t }));
+  (local || []).forEach((t) => {
+    if (t?.id && !deletedIds.has(t.id)) {
+      map.set(t.id, { ...t });
+    }
+  });
 
   incoming.forEach((remote) => {
+    if (!remote?.id || deletedIds.has(remote.id)) return;
     if (!map.has(remote.id)) {
       // 로컬에 없는 신규 항목 추가
       map.set(remote.id, remote);
     } else {
-      // 둘 다 존재하는 경우: 서브투두 및 상태 병합
+      // 둘 다 존재하는 경우: 최신 updatedAt 기준 상태 병합
       const existing = map.get(remote.id)!;
+      const localTime = existing.updatedAt || 0;
+      const remoteTime = remote.updatedAt || 0;
+
+      // 서브투두 병합
       const subMap = new Map<string, any>();
       (existing.subTodos || []).forEach((st) => subMap.set(st.id, st));
       (remote.subTodos || []).forEach((st) => {
         if (!subMap.has(st.id)) {
           subMap.set(st.id, st);
         } else {
-          // 둘 중 완료된 상태가 있으면 완료로 유지
           const localSt = subMap.get(st.id);
+          const completedStatus = remoteTime > localTime ? st.completed : localSt.completed;
           subMap.set(st.id, {
             ...localSt,
-            completed: localSt.completed || st.completed,
+            ...st,
+            completed: completedStatus,
           });
         }
       });
 
+      const base = remoteTime > localTime ? remote : existing;
       map.set(remote.id, {
-        ...existing,
-        completed: existing.completed || remote.completed,
+        ...base,
         subTodos: Array.from(subMap.values()),
+        order: existing.order ?? remote.order,
       });
     }
   });
 
-  return Array.from(map.values()).sort((a, b) => a.order - b.order);
+  return Array.from(map.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
 /**
- * 2개의 루틴 목록 스마트 병합 (완료일자 합집합)
+ * 2개의 루틴 목록 스마트 병합 (updatedAt 및 삭제 톰스톤 반영)
  */
-function mergeRoutineList(local: RoutineItem[], incoming: RoutineItem[]): RoutineItem[] {
+function mergeRoutineList(
+  local: RoutineItem[],
+  incoming: RoutineItem[],
+  deletedIds: Set<string> = new Set(),
+): RoutineItem[] {
   const map = new Map<string, RoutineItem>();
-  local.forEach((r) => map.set(r.id, { ...r }));
+  (local || []).forEach((r) => {
+    if (r?.id && !deletedIds.has(r.id)) {
+      map.set(r.id, { ...r });
+    }
+  });
 
   incoming.forEach((remote) => {
+    if (!remote?.id || deletedIds.has(remote.id)) return;
     if (!map.has(remote.id)) {
       map.set(remote.id, remote);
     } else {
       const existing = map.get(remote.id)!;
-      // 완료일자 합집합(Set)으로 통합 (어느 한 기기에서 체크한 기록도 유실되지 않음)
-      const mergedDates = Array.from(
-        new Set([...(existing.completedDates || []), ...(remote.completedDates || [])]),
-      );
+      const localTime = existing.updatedAt || 0;
+      const remoteTime = remote.updatedAt || 0;
+
+      // 한 기기에서 최근 1분 이내에 명시적으로 수정되었다면 해당 상태 우선,
+      // 그 외에는 completedDates 합집합으로 병합하여 두 기기의 체크 기록을 모두 보존
+      let mergedCompletedDates: string[];
+      if (Math.abs(remoteTime - localTime) > 60000 && remoteTime > localTime) {
+        mergedCompletedDates = remote.completedDates || [];
+      } else if (Math.abs(remoteTime - localTime) > 60000 && localTime > remoteTime) {
+        mergedCompletedDates = existing.completedDates || [];
+      } else {
+        mergedCompletedDates = Array.from(
+          new Set([...(existing.completedDates || []), ...(remote.completedDates || [])]),
+        ).sort();
+      }
 
       // 서브루틴 완료일자 통합
+      const existingSubs: any[] = existing.subRoutines || [];
+      const remoteSubs: any[] = remote.subRoutines || [];
       const subMap = new Map<string, any>();
-      (existing.subRoutines || []).forEach((sr) => subMap.set(sr.id, { ...sr }));
-      (remote.subRoutines || []).forEach((sr) => {
-        if (!subMap.has(sr.id)) {
-          subMap.set(sr.id, sr);
+      existingSubs.forEach((s) => {
+        if (s?.id) subMap.set(s.id, { ...s });
+      });
+      remoteSubs.forEach((s) => {
+        if (!s?.id) return;
+        if (!subMap.has(s.id)) {
+          subMap.set(s.id, s);
         } else {
-          const exSr = subMap.get(sr.id);
+          const exSr = subMap.get(s.id);
           const combinedSrDates = Array.from(
-            new Set([...(exSr.completedDates || []), ...(sr.completedDates || [])]),
-          );
-          subMap.set(sr.id, { ...exSr, completedDates: combinedSrDates });
+            new Set([...(exSr.completedDates || []), ...(s.completedDates || [])]),
+          ).sort();
+          subMap.set(s.id, { ...exSr, ...s, completedDates: combinedSrDates });
         }
       });
 
+      const base = remoteTime > localTime ? remote : existing;
       map.set(remote.id, {
-        ...existing,
-        completedDates: mergedDates,
+        ...base,
+        completedDates: mergedCompletedDates,
         subRoutines: Array.from(subMap.values()),
+        order: existing.order ?? remote.order,
       });
     }
   });
 
-  return Array.from(map.values()).sort((a, b) => a.order - b.order);
+  return Array.from(map.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
 /**
  * 조용한 백그라운드 데이터 업로드 (클라우드 최신화)
  */
 async function executeUpload(): Promise<boolean> {
-  const accessToken = await getValidAccessToken();
+  const accessToken = await getTokenWithRecovery();
   if (!accessToken) return false;
 
+  const existingFile = await findBackupFile(accessToken);
   const diaries = getAllDiaries();
-  const attachmentsMap: Record<string, string> = {};
-
-  for (const item of diaries) {
-    if (!item.attachmentsJson) continue;
-    try {
-      const atts: Attachment[] = JSON.parse(item.attachmentsJson);
-      if (Array.isArray(atts)) {
-        for (const att of atts) {
-          if (att.filePath && att.fileName && !attachmentsMap[att.fileName]) {
-            try {
-              const info = await FileSystem.getInfoAsync(att.filePath);
-              if (info.exists) {
-                const base64 = await FileSystem.readAsStringAsync(att.filePath, {
-                  encoding: FileSystem.EncodingType.Base64,
-                });
-                attachmentsMap[att.fileName] = base64;
-              }
-            } catch (_) {}
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
   const storeState = useAppStore.getState();
   const nowIso = new Date().toISOString();
 
+  // 클라우드 백업용 다이어리: 기기간 절대경로 오염을 방지하기 위해 파일명 기반 상대경로로 정규화
+  const sanitizedDiaries = diaries.map((item) => {
+    if (!item.attachmentsJson) return item;
+    try {
+      const atts: Attachment[] = JSON.parse(item.attachmentsJson);
+      if (Array.isArray(atts)) {
+        const cleaned = atts.map((att) => {
+          const fName = att.fileName || att.filePath?.split(/[/\\]/).pop() || 'image.jpg';
+          return {
+            ...att,
+            fileName: fName,
+            filePath: `attachments/${fName}`,
+          };
+        });
+        return {
+          ...item,
+          attachmentsJson: JSON.stringify(cleaned),
+        };
+      }
+    } catch (_) {}
+    return item;
+  });
+
+  // 2. 가벼운 순수 텍스트 백업 데이터 생성 (Base64 제외 -> 수 KB 초고속 전송)
+  // 2. 미디어 파일 먼저 구글 드라이브에 안전하게 업로드
+  // (사진이 먼저 올라가 있어야 PC가 텍스트를 감지했을 때 사진을 바로 함께 다운로드하여 25초 지연/엑박 방지)
+  try {
+    const folderId = await getOrCreateMediaFolder(accessToken);
+    if (folderId) {
+      const remoteFiles = await listMediaFilesInFolder(accessToken, folderId);
+      const attDir = `${FileSystem.documentDirectory}attachments/`;
+
+      for (const item of diaries) {
+        if (!item.attachmentsJson) continue;
+        try {
+          const atts: Attachment[] = JSON.parse(item.attachmentsJson);
+          if (Array.isArray(atts)) {
+            for (const att of atts) {
+              const fName = att.fileName || att.filePath?.split(/[/\\]/).pop();
+              if (fName && !remoteFiles.has(fName)) {
+                let targetUri = att.filePath;
+                if (!targetUri || !(await FileSystem.getInfoAsync(targetUri)).exists) {
+                  targetUri = `${attDir}${fName}`;
+                }
+                const info = await FileSystem.getInfoAsync(targetUri);
+                if (info.exists) {
+                  const uploadedId = await uploadMediaFileToFolder(accessToken, folderId, fName, targetUri);
+                  if (uploadedId) remoteFiles.set(fName, uploadedId);
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (mediaErr) {
+    console.warn('Media pre-upload error, proceeding with manifest:', mediaErr);
+  }
+
+  // 3. 사진 업로드 완료 후 순수 텍스트 백업 데이터 생성 및 클라우드 최신화
   const backupData: TidaCloudBackup = {
     manifest: {
       app: 'TIDA',
@@ -209,14 +306,16 @@ async function executeUpload(): Promise<boolean> {
       platform: 'mobile',
       description: 'TIDA Auto-Sync Data',
     },
-    diary: diaries,
+    diary: sanitizedDiaries,
     todos: storeState.todos || [],
     routines: storeState.routines || [],
-    attachments: attachmentsMap,
+    deletedDiaryKeys: getDeletedDiaryKeys(),
+    deletedTodoIds: storeState.deletedTodoIds || [],
+    deletedRoutineIds: storeState.deletedRoutineIds || [],
+    attachments: {}, // 하위 호환성을 위해 빈 객체 유지
   };
 
   const jsonContent = JSON.stringify(backupData, null, 2);
-  const existingFile = await findBackupFile(accessToken);
   let savedModifiedTime = nowIso;
 
   if (existingFile) {
@@ -271,13 +370,14 @@ async function executeUpload(): Promise<boolean> {
  * (2.5초간 추가 조작이 없으면 백그라운드에서 조용히 업로드)
  */
 export function triggerAutoSync(delayMs = 2500) {
-  if (isInternalSyncing) return;
+  if (isInternalSyncing || !isInitialPullDone || isSyncInProgress) return;
 
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
 
   debounceTimer = setTimeout(async () => {
+    if (isInternalSyncing || isSyncInProgress) return;
     try {
       const user = await getStoredGoogleUser();
       if (!user) return; // 미연동 시 스킵
@@ -300,6 +400,7 @@ export async function flushAutoSync(): Promise<void> {
   if (debounceTimer) {
     clearTimeout(debounceTimer);
     debounceTimer = null;
+    if (isSyncInProgress) return;
     try {
       const user = await getStoredGoogleUser();
       if (!user) return;
@@ -319,12 +420,20 @@ export async function flushAutoSync(): Promise<void> {
  * 로컬 데이터를 완전히 최신 상태로 갱신 (삭제/체크해제 등 완벽 반영)
  */
 export async function performStartupSync(): Promise<void> {
+  if (isSyncInProgress) return;
+  isSyncInProgress = true;
+
   try {
     const user = await getStoredGoogleUser();
     if (!user) return;
 
-    const accessToken = await getValidAccessToken();
+    const accessToken = await getTokenWithRecovery();
     if (!accessToken) return;
+
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
 
     const file = await findBackupFile(accessToken);
     if (!file) {
@@ -354,7 +463,7 @@ export async function performStartupSync(): Promise<void> {
         try {
           const attDir = `${FileSystem.documentDirectory}attachments/`;
 
-          // 1. 타임라인 일기 최신 상태로 복원 (클라우드에서 삭제된 글은 로컬에서도 완벽 제거)
+          // 1. 타임라인 일기 첨부파일 경로 로컬 보정
           const remoteDiaries = Array.isArray(cloudData.diary) ? cloudData.diary : [];
           for (const item of remoteDiaries) {
             if (item.attachmentsJson) {
@@ -362,8 +471,10 @@ export async function performStartupSync(): Promise<void> {
                 const atts: Attachment[] = JSON.parse(item.attachmentsJson);
                 if (Array.isArray(atts)) {
                   for (const att of atts) {
-                    if (att.fileName) {
-                      att.filePath = `${attDir}${att.fileName}`;
+                    const fName = att.fileName || att.filePath?.split(/[/\\]/).pop();
+                    if (fName) {
+                      att.fileName = fName;
+                      att.filePath = `${attDir}${fName}`;
                     }
                   }
                   item.attachmentsJson = JSON.stringify(atts);
@@ -373,114 +484,187 @@ export async function performStartupSync(): Promise<void> {
           }
 
           const rawData = cloudData as any;
-          const remoteTodos = Array.isArray(cloudData.todos)
+          const remoteTodos: Todolist[] = Array.isArray(cloudData.todos)
             ? cloudData.todos
             : Array.isArray(rawData.settings?.todos)
               ? rawData.settings.todos
               : [];
-          const remoteRoutines = Array.isArray(cloudData.routines)
+          const remoteRoutines: RoutineItem[] = Array.isArray(cloudData.routines)
             ? cloudData.routines
             : Array.isArray(rawData.settings?.routines)
               ? rawData.settings.routines
               : [];
 
-          // 첫 연동(localSyncTime === 0)인데 로컬에도 기존 데이터가 있는 경우:
-          // 클라우드와 로컬을 합집합으로 병합하여 기존 로컬 데이터 유실 방지
-          const currentDiaries = getAllDiaries();
+          // 2. 원격 삭제 톰스톤 적용 (유령 부활 완벽 차단)
+          const remoteDeletedDiaryKeys = cloudData.deletedDiaryKeys || [];
+          if (remoteDeletedDiaryKeys.length > 0) {
+            recordDeletedDiaryKeys(remoteDeletedDiaryKeys);
+            applyDeletionsByKeys(remoteDeletedDiaryKeys);
+          }
+          const allDeletedDiaryKeys = new Set(getDeletedDiaryKeys());
+
           const currentStore = useAppStore.getState();
+          const remoteDeletedTodoIds = cloudData.deletedTodoIds || [];
+          const remoteDeletedRoutineIds = cloudData.deletedRoutineIds || [];
+          const allDeletedTodoIds = new Set([
+            ...(currentStore.deletedTodoIds || []),
+            ...remoteDeletedTodoIds,
+          ]);
+          const allDeletedRoutineIds = new Set([
+            ...(currentStore.deletedRoutineIds || []),
+            ...remoteDeletedRoutineIds,
+          ]);
+
+          // 3. 로컬에만 있는 다이어리 중, 삭제된 적이 없는 신규 일기 식별
+          const remoteKeys = new Set(remoteDiaries.map((d) => getDiaryKey(d)));
+          const currentDiaries = getAllDiaries();
+          const localNewDiaries = currentDiaries.filter((d) => {
+            const key = getDiaryKey(d);
+            return !remoteKeys.has(key) && !allDeletedDiaryKeys.has(key);
+          });
+
+          // 4. 다이어리 복원 및 병합
+          if (localNewDiaries.length > 0) {
+            restoreAllDiaries([...remoteDiaries, ...localNewDiaries]);
+          } else {
+            if (remoteDiaries.length > 0 || currentDiaries.length === 0) {
+              restoreAllDiaries(remoteDiaries);
+            }
+          }
+
+          // 5. 투두 & 루틴 스마트 양방향 병합
           const currentTodos = currentStore.todos || [];
           const currentRoutines = currentStore.routines || [];
-          const isInitialSyncWithLocalData =
-            localSyncTime === 0 &&
-            (currentDiaries.length > 0 || currentTodos.length > 0 || currentRoutines.length > 0);
+          const mergedTodos = mergeTodoList(currentTodos, remoteTodos, allDeletedTodoIds);
+          const mergedRoutines = mergeRoutineList(currentRoutines, remoteRoutines, allDeletedRoutineIds);
 
-          if (isInitialSyncWithLocalData) {
-            // 1. 다이어리 합집합 병합
-            mergeDiaries(remoteDiaries);
+          useAppStore.setState((state) => ({
+            ...state,
+            todos: mergedTodos,
+            routines: mergedRoutines,
+            deletedTodoIds: Array.from(allDeletedTodoIds).slice(-100),
+            deletedRoutineIds: Array.from(allDeletedRoutineIds).slice(-100),
+          }));
 
-            // 2. 투두 & 루틴 스마트 병합
-            const mergedTodos = mergeTodoList(currentTodos, remoteTodos);
-            const mergedRoutines = mergeRoutineList(currentRoutines, remoteRoutines);
-
-            useAppStore.setState((state) => ({
-              ...state,
-              todos: mergedTodos,
-              routines: mergedRoutines,
-            }));
-
-            // 합본을 클라우드에 재업로드하여 양쪽 데이터 모두 보존
+          // 6. 로컬에 새로운 일기가 있었거나 첫 동기화인 경우 합본 재업로드
+          if (localNewDiaries.length > 0 || localSyncTime === 0) {
             await executeUpload();
           } else {
-            // 평상시 동기화: 클라우드 최신 스냅샷으로 100% 덮어쓰기 (삭제/체크해제 완벽 반영)
-            restoreAllDiaries(remoteDiaries);
-
-            useAppStore.setState((state) => ({
-              ...state,
-              todos: remoteTodos,
-              routines: remoteRoutines,
-            }));
-
             await setLastBackupTime(file.modifiedTime);
           }
 
-          // ★ [초고속 반영] 텍스트가 복원되었으므로 화면을 즉시 갱신 (0.2초 이내)
+          // 화면 즉시 갱신
           notifySyncDataPulled();
 
-          // 3. 첨부 사진 복원은 백그라운드 비동기로 처리 (화면 블로킹 없음)
+          // 7. 첨부 사진 복원은 백그라운드 비동기로 처리 (화면 블로킹 없음)
           const remoteAttachments = cloudData.attachments;
-          if (remoteAttachments && typeof remoteAttachments === 'object') {
-            (async () => {
-              try {
-                const dirInfo = await FileSystem.getInfoAsync(attDir);
-                if (!dirInfo.exists) {
-                  await FileSystem.makeDirectoryAsync(attDir, { intermediates: true });
-                }
+          (async () => {
+            try {
+              const dirInfo = await FileSystem.getInfoAsync(attDir);
+              if (!dirInfo.exists) {
+                await FileSystem.makeDirectoryAsync(attDir, { intermediates: true });
+              }
+
+              let anyDownloaded = false;
+
+              // 7-1. 레거시 Base64 첨부파일 복원
+              if (remoteAttachments && typeof remoteAttachments === 'object') {
                 for (const [fileName, base64] of Object.entries(remoteAttachments)) {
                   if (!fileName || !base64) continue;
                   const targetPath = `${attDir}${fileName}`;
                   const fInfo = await FileSystem.getInfoAsync(targetPath);
                   if (!fInfo.exists) {
-                    await FileSystem.writeAsStringAsync(targetPath, base64, {
-                      encoding: FileSystem.EncodingType.Base64,
-                    });
+                    try {
+                      await FileSystem.writeAsStringAsync(targetPath, base64, {
+                        encoding: FileSystem.EncodingType.Base64,
+                      });
+                      anyDownloaded = true;
+                    } catch (_) {}
                   }
                 }
-                // 사진 파일 저장이 끝나면 타임라인 이미지 새로고침
-                notifySyncDataPulled();
-              } catch (attErr) {
-                console.warn('Background attachments download error:', attErr);
               }
-            })();
-          }
+
+              // 7-2. tida-media 폴더에서 누락된 사진 파일 다운로드
+              const missingFiles: string[] = [];
+              for (const item of remoteDiaries) {
+                if (!item.attachmentsJson) continue;
+                try {
+                  const atts: Attachment[] = JSON.parse(item.attachmentsJson);
+                  if (Array.isArray(atts)) {
+                    for (const att of atts) {
+                      const fName = att.fileName || att.filePath?.split(/[/\\]/).pop();
+                      if (fName) {
+                        const targetPath = `${attDir}${fName}`;
+                        const fInfo = await FileSystem.getInfoAsync(targetPath);
+                        if (!fInfo.exists) {
+                          missingFiles.push(fName);
+                        }
+                      }
+                    }
+                  }
+                } catch (_) {}
+              }
+
+              if (missingFiles.length > 0) {
+                const folderId = await getOrCreateMediaFolder(accessToken);
+                if (folderId) {
+                  const mediaFilesMap = await listMediaFilesInFolder(accessToken, folderId);
+                  for (const fName of missingFiles) {
+                    const fileId = mediaFilesMap.get(fName);
+                    if (fileId) {
+                      const localTarget = `${attDir}${fName}`;
+                      const success = await downloadMediaFileFromDrive(accessToken, fileId, localTarget);
+                      if (success) anyDownloaded = true;
+                    }
+                  }
+                }
+              }
+
+              if (anyDownloaded) {
+                notifySyncDataPulled();
+              }
+            } catch (attErr) {
+              console.warn('Background attachments download error:', attErr);
+            }
+          })();
         } finally {
           isInternalSyncing = false;
         }
 
-        // 최신 클라우드 데이터를 내려받았으므로 불필요한 재업로드(executeUpload)는 생략
         setStatus('synced');
       } else {
         setStatus('error');
       }
     } else {
-      // 이미 로컬이 최신 상태인 경우 별도 작업 없음
       setStatus('synced');
     }
   } catch (err) {
     console.warn('Startup sync error:', err);
     setStatus('error');
+  } finally {
+    isSyncInProgress = false;
+    isInitialPullDone = true;
   }
 }
 
 /**
- * 수동 즉시 동기화 (설정 등에서 [지금 동기화] 눌렀을 때 조용히 실행)
+ * 수동 즉시 동기화 (설정 등에서 [지금 동기화] 눌렀을 때 안전하게 양방향 병합 실행)
  */
 export async function performImmediateSync(): Promise<boolean> {
+  if (isSyncInProgress) return false;
   try {
     const user = await getStoredGoogleUser();
     if (!user) return false;
 
     setStatus('syncing');
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+
+    // 1. 최신 클라우드 확인 및 스마트 양방향 병합
     await performStartupSync();
+    // 2. 병합된 최신 결과를 클라우드에 확실히 커밋
     await executeUpload();
     setStatus('synced');
     return true;
@@ -496,7 +680,8 @@ export async function performImmediateSync(): Promise<boolean> {
  */
 export function initStoreSyncListener(): () => void {
   return useAppStore.subscribe((state, prevState) => {
-    if (isInternalSyncing) return;
+    // 앱 초기 pull 완료 전이나 동기화 진행 중에는 업로드 트리거 방지 (레이스 컨디션 차단)
+    if (isInternalSyncing || !isInitialPullDone || isSyncInProgress) return;
 
     const todosChanged = state.todos !== prevState.todos;
     const routinesChanged = state.routines !== prevState.routines;
@@ -511,14 +696,14 @@ export function initStoreSyncListener(): () => void {
  * 앱이 켜져 있는 동안 주기적으로(기본 3분) 상대 기기(PC 등)의 최신 변경사항을 확인하고 자동 동기화
  * (앱이 화면에 표시되는 active 상태일 때만 동작하여 배터리/데이터 보존)
  */
-export function startPeriodicSyncCheck(intervalMs = 180000): () => void {
+export function startPeriodicSyncCheck(intervalMs = 30000): () => void {
   const timer = setInterval(async () => {
     if (AppState.currentState !== 'active') return;
     if (isInternalSyncing || currentStatus === 'syncing') return;
     try {
       const user = await getStoredGoogleUser();
       if (!user) return;
-      const accessToken = await getValidAccessToken();
+      const accessToken = await getTokenWithRecovery();
       if (!accessToken) return;
 
       const file = await findBackupFile(accessToken);
@@ -537,3 +722,15 @@ export function startPeriodicSyncCheck(intervalMs = 180000): () => void {
   return () => clearInterval(timer);
 }
 
+/**
+ * 세션 만료 이벤트 핸들러 등록
+ * onSessionExpired 발생 시 동기화 상태를 'error'로 표시하고
+ * 리스너(UI 레이어)에게 재로그인이 필요함을 알림
+ * → _layout.tsx에서 앱 시작 시 한 번만 호출하면 됨
+ */
+export function initSessionExpiredHandler(onNeedRelogin: () => void): () => void {
+  return onSessionExpired(() => {
+    setStatus('error');
+    onNeedRelogin();
+  });
+}

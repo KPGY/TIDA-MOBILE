@@ -26,6 +26,26 @@ export interface GoogleTokens {
   expiresAt: number; // Unix timestamp in ms
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 세션 만료 리스너 시스템
+// syncManager 등에서 구독하여 세션 만료 시 자동 복구 흐름을 진행할 수 있도록 함
+// ─────────────────────────────────────────────────────────────────────────────
+type SessionExpiredListener = () => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => sessionExpiredListeners.delete(listener);
+}
+
+export function notifySessionExpired(): void {
+  sessionExpiredListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch (_) {}
+  });
+}
+
 /**
  * 저장된 또는 기본 클라이언트 ID 가져오기 (플랫폼별 자동 선택)
  */
@@ -127,7 +147,11 @@ export async function fetchGoogleUserInfo(accessToken: string): Promise<GoogleUs
 }
 
 /**
- * 유효한 액세스 토큰 반환 (필요시 리프레시 시도)
+ * 유효한 액세스 토큰 반환 (필요 시 Refresh Token으로 자동 갱신)
+ *
+ * 반환값:
+ *  - string : 유효한 토큰
+ *  - null   : Refresh Token도 만료/무효화됨 → 호출자가 getTokenWithRecovery()로 Silent Re-auth 시도
  */
 export async function getValidAccessToken(): Promise<string | null> {
   const tokens = await getStoredTokens();
@@ -136,12 +160,12 @@ export async function getValidAccessToken(): Promise<string | null> {
   }
 
   const now = Date.now();
-  // 만료 1분 전이면 갱신 필요하다고 판단
+  // 만료 1분 이상 남아 있으면 현재 토큰 바로 사용
   if (tokens.expiresAt && tokens.expiresAt - now > 60 * 1000) {
     return tokens.accessToken;
   }
 
-  // 만료되었고 리프레시 토큰이 있는 경우 갱신 시도
+  // 만료됐거나 곧 만료 → Refresh Token으로 자동 갱신 시도
   if (tokens.refreshToken) {
     try {
       const clientId = await getActiveClientId();
@@ -165,13 +189,127 @@ export async function getValidAccessToken(): Promise<string | null> {
         await AsyncStorage.setItem(STORAGE_KEYS.TOKENS, JSON.stringify(newTokens));
         return newTokens.accessToken;
       }
+
+      // ★ 수정: 서버가 리프레시를 거절(400 invalid_grant 등)하면 null 반환
+      // → 죽은 토큰을 그대로 리턴하던 기존 버그 수정
+      const errorBody = await refreshResponse.json().catch(() => ({}));
+      console.warn('[GoogleAuth] Token refresh rejected:', refreshResponse.status, errorBody);
+      return null;
     } catch (err) {
-      console.warn('Token refresh failed:', err);
+      // 네트워크 오류(오프라인 등)는 기존 토큰으로 일단 시도 (서버 거절과 구분)
+      console.warn('[GoogleAuth] Token refresh network error (offline?):', err);
+      return tokens.accessToken;
     }
   }
 
-  // 갱신 실패했으나 기존 토큰으로 일단 시도해봄 (또는 재로그인 필요)
-  return tokens.accessToken;
+  // 리프레시 토큰도 없고 만료된 경우
+  return null;
+}
+
+/**
+ * Silent Re-authentication (prompt: 'none')
+ * 사용자에게 로그인 UI를 보여주지 않고 조용히 새 토큰 발급 시도.
+ * 기기의 구글 세션이 살아있으면 성공, 그렇지 않으면 null 반환.
+ *
+ * 성공 조건:
+ * - 기기에 구글 계정 세션이 유지되어 있을 것
+ * - OAuth 동의(scope)가 이미 허용된 상태일 것
+ */
+export async function trySilentReauth(): Promise<string | null> {
+  try {
+    const clientId = await getActiveClientId();
+    if (!clientId) return null;
+
+    const redirectUri = AuthSession.makeRedirectUri({
+      native: `${GOOGLE_CONFIG.ANDROID_PACKAGE}:/oauthredirect`,
+      scheme: GOOGLE_CONFIG.APP_SCHEME,
+      path: 'oauthredirect',
+    });
+
+    const request = new AuthSession.AuthRequest({
+      clientId,
+      scopes: GOOGLE_CONFIG.SCOPES,
+      redirectUri,
+      responseType: AuthSession.ResponseType.Code,
+      usePKCE: true,
+      extraParams: {
+        access_type: 'offline',
+        prompt: 'none', // ★ 핵심: UI 없이 백그라운드 인증 시도
+      },
+    });
+
+    const result = await request.promptAsync(GOOGLE_CONFIG.DISCOVERY, {
+      showInRecents: false,
+    });
+
+    if (result.type === 'success' && result.params.code) {
+      const tokenResult = await AuthSession.exchangeCodeAsync(
+        {
+          clientId,
+          code: result.params.code,
+          extraParams: request.codeVerifier
+            ? { code_verifier: request.codeVerifier }
+            : undefined,
+          redirectUri,
+        },
+        GOOGLE_CONFIG.DISCOVERY,
+      );
+
+      const expiresAt =
+        Date.now() + (tokenResult.expiresIn ? tokenResult.expiresIn * 1000 : 3600 * 1000);
+      const prevTokens = await getStoredTokens();
+
+      const newTokens: GoogleTokens = {
+        accessToken: tokenResult.accessToken,
+        refreshToken: tokenResult.refreshToken || prevTokens?.refreshToken,
+        expiresAt,
+      };
+      await AsyncStorage.setItem(STORAGE_KEYS.TOKENS, JSON.stringify(newTokens));
+
+      // 사용자 정보도 갱신
+      try {
+        const user = await fetchGoogleUserInfo(tokenResult.accessToken);
+        await AsyncStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+      } catch (_) {}
+
+      console.log('[GoogleAuth] Silent re-auth succeeded');
+      return newTokens.accessToken;
+    }
+
+    // prompt:none 실패 (login_required, interaction_required 등)
+    const errorCode = (result as any).params?.error ?? result.type;
+    console.warn('[GoogleAuth] Silent re-auth failed:', errorCode);
+    return null;
+  } catch (err) {
+    console.warn('[GoogleAuth] Silent re-auth error:', err);
+    return null;
+  }
+}
+
+/**
+ * 토큰 완전 복구 시도 (3단계 레이어)
+ *
+ * 1단계: getValidAccessToken() — 정상 만료 시 Refresh Token으로 자동 갱신
+ * 2단계: trySilentReauth()    — Refresh Token 무효화 시 UI 없이 재인증 시도
+ * 3단계: 모두 실패 시 null 반환 + 세션 만료 이벤트 발생 → 재로그인 유도
+ *
+ * syncManager의 API 호출부에서 getValidAccessToken() 대신 이 함수를 사용하면
+ * 친구 케이스처럼 "동기화 일시정지 → Refresh Token 무효화" 상황을 자동으로 복구
+ */
+export async function getTokenWithRecovery(): Promise<string | null> {
+  // 1단계
+  const token = await getValidAccessToken();
+  if (token) return token;
+
+  // 2단계
+  console.log('[GoogleAuth] Refresh failed, attempting silent re-auth...');
+  const silentToken = await trySilentReauth();
+  if (silentToken) return silentToken;
+
+  // 3단계: 모두 실패 → 재로그인 필요
+  console.warn('[GoogleAuth] All token recovery attempts failed. Session expired.');
+  notifySessionExpired();
+  return null;
 }
 
 /**
@@ -211,7 +349,9 @@ export async function signInWithGoogle(): Promise<{
       },
     });
 
-    const result = await request.promptAsync(GOOGLE_CONFIG.DISCOVERY);
+    const result = await request.promptAsync(GOOGLE_CONFIG.DISCOVERY, {
+      showInRecents: false,
+    });
     console.log('[GoogleAuth] Auth prompt result:', result);
 
     if (result.type === 'cancel' || result.type === 'dismiss') {
@@ -238,6 +378,12 @@ export async function signInWithGoogle(): Promise<{
       GOOGLE_CONFIG.DISCOVERY,
     );
 
+    // ★ 수정: 토큰 교환이 완전히 완료된 후에 브라우저 닫기
+    // 이전: promptAsync 직후 dismiss → Chrome Custom Tab이 토큰 교환 전에 닫혀 에러 화면 잔류
+    // 이후: exchangeCodeAsync 완료 후 dismiss → 에러 화면 없이 깔끔하게 닫힘
+    try { WebBrowser.dismissAuthSession(); } catch (_) {}
+    try { WebBrowser.dismissBrowser(); } catch (_) {}
+
     const expiresAt =
       Date.now() + (tokenResult.expiresIn ? tokenResult.expiresIn * 1000 : 3600 * 1000);
 
@@ -254,6 +400,9 @@ export async function signInWithGoogle(): Promise<{
 
     return { success: true, user };
   } catch (error: any) {
+    // 에러 시에도 혹시 열려있는 브라우저 닫기
+    try { WebBrowser.dismissAuthSession(); } catch (_) {}
+    try { WebBrowser.dismissBrowser(); } catch (_) {}
     console.error('Google Sign-in Error:', error);
     return {
       success: false,

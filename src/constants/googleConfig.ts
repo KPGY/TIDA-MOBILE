@@ -32,6 +32,7 @@ export const GOOGLE_CONFIG = {
 
   // 백업 파일 명
   BACKUP_FILE_NAME: 'tida_backup.json',
+  MEDIA_FOLDER_NAME: 'tida-media',
   APP_SCHEME: 'tidamobile',
   ANDROID_PACKAGE: 'com.kypgy.tidamobile',
 };

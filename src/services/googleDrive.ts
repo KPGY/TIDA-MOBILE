@@ -1,5 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { getAllDiaries, restoreAllDiaries, DiaryItem, Attachment } from './db';
+import { getAllDiaries, restoreAllDiaries, DiaryItem, Attachment, getDeletedDiaryKeys, recordDeletedDiaryKeys } from './db';
 import { useAppStore, Todolist } from '../store/store';
 import { RoutineItem } from '../utils/routineHelper';
 import {
@@ -22,7 +22,11 @@ export interface TidaCloudBackup {
   todos: Todolist[];
   // 3. 루틴 데이터
   routines: RoutineItem[];
-  // 4. 타임라인 첨부 사진 (fileName -> Base64 문자열)
+  // 4. 삭제 톰스톤 (기기간 유령 부활 방지)
+  deletedDiaryKeys?: string[];
+  deletedTodoIds?: string[];
+  deletedRoutineIds?: string[];
+  // 5. 타임라인 첨부 사진 (fileName -> Base64 문자열)
   attachments?: Record<string, string>;
 }
 
@@ -53,6 +57,201 @@ export async function findBackupFile(accessToken: string): Promise<CloudFileInfo
     return data.files[0] as CloudFileInfo;
   }
   return null;
+}
+
+let cachedMediaFolderId: string | null = null;
+
+/**
+ * 미디어 폴더 캐시 초기화 (로그아웃 또는 계정 변경 시 호출)
+ * 초기화하지 않으면 이전 계정의 폴더 ID가 남아 잘못된 폴더에 업로드할 수 있음
+ */
+export function clearMediaFolderCache(): void {
+  cachedMediaFolderId = null;
+}
+
+/**
+ * 구글 드라이브의 'tida-media' 폴더 ID 조회 또는 생성
+ */
+export async function getOrCreateMediaFolder(accessToken: string): Promise<string | null> {
+  if (cachedMediaFolderId) return cachedMediaFolderId;
+  try {
+    const q = encodeURIComponent(`name='${GOOGLE_CONFIG.MEDIA_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&spaces=drive`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.files && data.files.length > 0) {
+        cachedMediaFolderId = data.files[0].id;
+        return cachedMediaFolderId;
+      }
+    }
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: GOOGLE_CONFIG.MEDIA_FOLDER_NAME,
+        mimeType: 'application/vnd.google-apps.folder',
+      }),
+    });
+    if (createRes.ok) {
+      const folder = await createRes.json();
+      cachedMediaFolderId = folder.id;
+      return cachedMediaFolderId;
+    }
+  } catch (err) {
+    console.warn('getOrCreateMediaFolder error:', err);
+  }
+  return null;
+}
+
+/**
+ * tida-media 폴더 내의 파일 목록 (fileName -> fileId 맵)
+ */
+export async function listMediaFilesInFolder(accessToken: string, folderId: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  try {
+    const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=1000`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.files) {
+        for (const f of data.files) {
+          if (f.name && f.id) map.set(f.name, f.id);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('listMediaFilesInFolder error:', err);
+  }
+  return map;
+}
+
+/**
+ * tida-media 폴더로 로컬 미디어 단건 업로드 (순수 바이너리 Resumable Upload)
+ */
+export async function uploadMediaFileToFolder(
+  accessToken: string,
+  folderId: string,
+  fileName: string,
+  fileUri: string,
+): Promise<string | null> {
+  try {
+    const info = await FileSystem.getInfoAsync(fileUri);
+    if (!info.exists) return null;
+
+    const ext = fileName.split('.').pop()?.toLowerCase() || 'jpeg';
+    const mimeType =
+      ext === 'png'
+        ? 'image/png'
+        : ext === 'webp'
+          ? 'image/webp'
+          : ext === 'gif'
+            ? 'image/gif'
+            : 'image/jpeg';
+
+    // 1. Resumable Upload 세션 시작 요청
+    const metadata = {
+      name: fileName,
+      parents: [folderId],
+    };
+
+    const sessionRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-Upload-Content-Type': mimeType,
+        },
+        body: JSON.stringify(metadata),
+      },
+    );
+
+    if (!sessionRes.ok) {
+      console.warn(`Failed to create resumable upload session: ${sessionRes.status}`);
+      return null;
+    }
+
+    const sessionUrl = sessionRes.headers.get('Location') || sessionRes.headers.get('location');
+    if (!sessionUrl) {
+      console.warn('No Location header in Google Drive resumable upload response');
+      return null;
+    }
+
+    // 2. 바이너리 스트림으로 직접 파일 업로드 (Base64 인코딩 없이 원본 바이너리 그대로 전송)
+    const uploadResult = await FileSystem.uploadAsync(sessionUrl, fileUri, {
+      httpMethod: 'PUT',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        'Content-Type': mimeType,
+      },
+    });
+
+    if (uploadResult.status === 200 || uploadResult.status === 201) {
+      const data = JSON.parse(uploadResult.body);
+      return (data.id as string) || null;
+    } else {
+      console.warn(`uploadAsync failed with status ${uploadResult.status}:`, uploadResult.body);
+    }
+  } catch (err) {
+    console.warn(`uploadMediaFileToFolder error for ${fileName}:`, err);
+  }
+  return null;
+}
+
+/**
+ * tida-media 폴더에서 파일 다운로드
+ */
+export async function downloadMediaFileFromDrive(
+  accessToken: string,
+  fileId: string,
+  destPath: string,
+): Promise<boolean> {
+  try {
+    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+    const res = await FileSystem.downloadAsync(downloadUrl, destPath, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    return res.status >= 200 && res.status < 300;
+  } catch (err) {
+    console.warn(`downloadMediaFileFromDrive error for ${destPath}:`, err);
+    return false;
+  }
+}
+
+/**
+ * tida-media 폴더에서 특정 파일 백그라운드 삭제
+ */
+export async function deleteMediaFileFromDrive(
+  accessToken: string,
+  fileName: string,
+): Promise<void> {
+  try {
+    const folderId = await getOrCreateMediaFolder(accessToken);
+    if (!folderId) return;
+    const q = encodeURIComponent(`'${folderId}' in parents and name='${fileName}' and trashed=false`);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.files && data.files.length > 0) {
+        for (const f of data.files) {
+          await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 /**
@@ -107,25 +306,31 @@ export async function uploadBackupToGoogleDrive(): Promise<{
     // 1. 타임라인 SQLite 일기 데이터 가져오기
     const diaries = getAllDiaries();
 
-    // 2. 타임라인 첨부 사진들을 Base64로 인코딩하여 수집
+    // 2. 타임라인 첨부 사진들을 Base64로 인코딩하여 수집 및 클라우드 업로드용 상대경로 정규화
     const attachmentsMap: Record<string, string> = {};
+    const attDir = `${FileSystem.documentDirectory}attachments/`;
     for (const item of diaries) {
       if (!item.attachmentsJson) continue;
       try {
         const atts: Attachment[] = JSON.parse(item.attachmentsJson);
         if (Array.isArray(atts)) {
           for (const att of atts) {
-            if (att.filePath && att.fileName && !attachmentsMap[att.fileName]) {
+            const fName = att.fileName || att.filePath?.split(/[/\\]/).pop();
+            if (fName && !attachmentsMap[fName]) {
               try {
-                const info = await FileSystem.getInfoAsync(att.filePath);
+                let targetUri = att.filePath;
+                if (!targetUri || !(await FileSystem.getInfoAsync(targetUri)).exists) {
+                  targetUri = `${attDir}${fName}`;
+                }
+                const info = await FileSystem.getInfoAsync(targetUri);
                 if (info.exists) {
-                  const base64 = await FileSystem.readAsStringAsync(att.filePath, {
+                  const base64 = await FileSystem.readAsStringAsync(targetUri, {
                     encoding: FileSystem.EncodingType.Base64,
                   });
-                  attachmentsMap[att.fileName] = base64;
+                  attachmentsMap[fName] = base64;
                 }
               } catch (readErr) {
-                console.warn(`첨부파일(${att.fileName}) 읽기 실패:`, readErr);
+                console.warn(`첨부파일(${fName}) 읽기 실패:`, readErr);
               }
             }
           }
@@ -134,6 +339,28 @@ export async function uploadBackupToGoogleDrive(): Promise<{
         console.warn('attachmentsJson 파싱 오류:', parseErr);
       }
     }
+
+    const sanitizedDiaries = diaries.map((item) => {
+      if (!item.attachmentsJson) return item;
+      try {
+        const atts: Attachment[] = JSON.parse(item.attachmentsJson);
+        if (Array.isArray(atts)) {
+          const cleaned = atts.map((att) => {
+            const fName = att.fileName || att.filePath?.split(/[/\\]/).pop() || 'image.jpg';
+            return {
+              ...att,
+              fileName: fName,
+              filePath: `attachments/${fName}`,
+            };
+          });
+          return {
+            ...item,
+            attachmentsJson: JSON.stringify(cleaned),
+          };
+        }
+      } catch (_) {}
+      return item;
+    });
 
     // 3. Zustand Store에서 순수 데이터(투두, 루틴)만 가져오기 (테마/상태값 제외)
     const storeState = useAppStore.getState();
@@ -149,20 +376,24 @@ export async function uploadBackupToGoogleDrive(): Promise<{
         platform: 'mobile',
         description: 'TIDA Pure Data Backup (Timeline, Photos, Todos, Routines)',
       },
-      diary: diaries,
+      diary: sanitizedDiaries,
       todos,
       routines,
+      deletedDiaryKeys: getDeletedDiaryKeys(),
+      deletedTodoIds: storeState.deletedTodoIds || [],
+      deletedRoutineIds: storeState.deletedRoutineIds || [],
       attachments: attachmentsMap,
     };
 
     const jsonContent = JSON.stringify(backupData, null, 2);
+    let savedModifiedTime = backupDate;
 
     // 4. 구글 드라이브 기존 파일 확인 후 업데이트 또는 신규 생성
     const existingFile = await findBackupFile(accessToken);
 
     if (existingFile) {
       // 기존 파일 내용 업데이트 (PATCH)
-      const updateUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media`;
+      const updateUrl = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media&fields=id,name,modifiedTime`;
       const updateRes = await fetch(updateUrl, {
         method: 'PATCH',
         headers: {
@@ -174,6 +405,10 @@ export async function uploadBackupToGoogleDrive(): Promise<{
 
       if (!updateRes.ok) {
         throw new Error(`파일 업데이트 실패 (${updateRes.status})`);
+      }
+      const data = await updateRes.json().catch(() => null);
+      if (data?.modifiedTime) {
+        savedModifiedTime = data.modifiedTime;
       }
     } else {
       // 신규 파일 생성 (Multipart POST)
@@ -193,7 +428,7 @@ export async function uploadBackupToGoogleDrive(): Promise<{
         `${jsonContent}\r\n` +
         `--${boundary}--`;
 
-      const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+      const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime';
       const uploadRes = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
@@ -206,10 +441,14 @@ export async function uploadBackupToGoogleDrive(): Promise<{
       if (!uploadRes.ok) {
         throw new Error(`파일 업로드 실패 (${uploadRes.status})`);
       }
+      const data = await uploadRes.json().catch(() => null);
+      if (data?.modifiedTime) {
+        savedModifiedTime = data.modifiedTime;
+      }
     }
 
-    // 5. 마지막 백업 일시 저장
-    await setLastBackupTime(backupDate);
+    // 5. 마지막 백업 일시 저장 (구글 드라이브 서버 시계 기준)
+    await setLastBackupTime(savedModifiedTime);
 
     return {
       success: true,
@@ -314,9 +553,10 @@ export async function restoreBackupFromGoogleDrive(): Promise<{
           const atts: Attachment[] = JSON.parse(item.attachmentsJson);
           if (Array.isArray(atts)) {
             for (const att of atts) {
-              if (att.fileName) {
-                // 로컬의 attachments 디렉토리 절대경로로 재매핑
-                att.filePath = `${attDir}${att.fileName}`;
+              const fName = att.fileName || att.filePath?.split(/[/\\]/).pop();
+              if (fName) {
+                att.fileName = fName;
+                att.filePath = `${attDir}${fName}`;
               }
             }
             item.attachmentsJson = JSON.stringify(atts);

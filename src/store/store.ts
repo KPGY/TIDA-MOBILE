@@ -26,6 +26,7 @@ export interface Todolist {
   subTodos: SubTodo[];
   order: number;
   color?: string;
+  updatedAt?: number;
 }
 
 export interface ThemeColors {
@@ -75,6 +76,9 @@ export interface AppState extends ThemeColors, GradientColors {
   mainTextMode: 'light' | 'dark';
   savedThemes: SavedTheme[];
   activeThemeId: string | null;
+
+  deletedTodoIds: string[];
+  deletedRoutineIds: string[];
 
   // Actions
   setSingleColor: (key: keyof ThemeColors, color: string) => void;
@@ -157,7 +161,7 @@ export const useAppStore = create<AppState>()(
       bgAttachmentPath: null,
       bgOpacity: 0.45,
       startPage: 'home',
-      messageOrder: 'top',
+      messageOrder: 'bottom',
       savedThemes: [],
       activeThemeId: null,
       bgTextMode: getContrastMode(defaultColors.bgTheme),
@@ -167,6 +171,8 @@ export const useAppStore = create<AppState>()(
 
       todos: [],
       routines: [],
+      deletedTodoIds: [],
+      deletedRoutineIds: [],
 
       setSingleColor: (key, color) => {
         set((state) => {
@@ -277,7 +283,7 @@ export const useAppStore = create<AppState>()(
           bgAttachmentPath: null,
           bgOpacity: 0.45,
           startPage: 'home',
-          messageOrder: 'top',
+          messageOrder: 'bottom',
           savedThemes: [],
           activeThemeId: null,
           bgTextMode: getContrastMode(defaultColors.bgTheme),
@@ -292,12 +298,14 @@ export const useAppStore = create<AppState>()(
       // --- 투두(Todo) 액션 ---
       addTodo: (content, subContents = [], color = 'transparent') => {
         if (!content.trim()) return;
+        const now = Date.now();
         const newTodo: Todolist = {
           id: generateId(),
           content: content.trim(),
           completed: false,
           order: get().todos.length,
           color,
+          updatedAt: now,
           subTodos: subContents
             .filter((sub) => sub.trim() !== '')
             .map((sub, index) => ({
@@ -312,6 +320,7 @@ export const useAppStore = create<AppState>()(
 
       addSubTodo: (parentId, content) => {
         if (!content.trim()) return;
+        const now = Date.now();
         set((state) => ({
           todos: state.todos.map((todo) => {
             if (todo.id === parentId) {
@@ -323,6 +332,7 @@ export const useAppStore = create<AppState>()(
               };
               return {
                 ...todo,
+                updatedAt: now,
                 subTodos: [...todo.subTodos, newSub],
                 completed: false,
               };
@@ -333,6 +343,7 @@ export const useAppStore = create<AppState>()(
       },
 
       toggleTodo: (id) => {
+        const now = Date.now();
         set((state) => ({
           todos: state.todos.map((todo) => {
             if (todo.id === id) {
@@ -344,6 +355,7 @@ export const useAppStore = create<AppState>()(
               return {
                 ...todo,
                 completed: nextStatus,
+                updatedAt: now,
               };
             }
 
@@ -357,6 +369,7 @@ export const useAppStore = create<AppState>()(
                 ...todo,
                 subTodos: updatedSubTodos,
                 completed: allSubCompleted,
+                updatedAt: now,
               };
             }
 
@@ -368,16 +381,22 @@ export const useAppStore = create<AppState>()(
       removeTodo: (id) => {
         set((state) => ({
           todos: state.todos.filter((todo) => todo.id !== id),
+          deletedTodoIds: [...(state.deletedTodoIds || []).slice(-100), id],
         }));
       },
 
       removeCompleteTodo: () => {
-        set((state) => ({
-          todos: state.todos.filter((todo) => !todo.completed),
-        }));
+        set((state) => {
+          const removed = state.todos.filter((todo) => todo.completed).map((t) => t.id);
+          return {
+            todos: state.todos.filter((todo) => !todo.completed),
+            deletedTodoIds: [...(state.deletedTodoIds || []).slice(-100), ...removed],
+          };
+        });
       },
 
       updateTodo: (id, content, subTodos, color) => {
+        const now = Date.now();
         set((state) => ({
           todos: state.todos.map((todo) => {
             if (todo.id === id) {
@@ -385,6 +404,7 @@ export const useAppStore = create<AppState>()(
                 ...todo,
                 content,
                 color: color !== undefined ? color : todo.color,
+                updatedAt: now,
                 subTodos: subTodos.map((s, index) => {
                   const existingSub = todo.subTodos.find((old) => old.id === s.id);
                   return {
@@ -402,13 +422,20 @@ export const useAppStore = create<AppState>()(
       },
 
       clearCompleted: () => {
-        set((state) => ({
-          todos: state.todos.filter((todo) => !todo.completed),
-        }));
+        set((state) => {
+          const removed = state.todos.filter((todo) => todo.completed).map((t) => t.id);
+          return {
+            todos: state.todos.filter((todo) => !todo.completed),
+            deletedTodoIds: [...(state.deletedTodoIds || []).slice(-100), ...removed],
+          };
+        });
       },
 
       reorderTodos: (newTodos) => {
-        set({ todos: newTodos });
+        const now = Date.now();
+        set({
+          todos: newTodos.map((t, idx) => ({ ...t, order: idx, updatedAt: now })),
+        });
       },
 
       // --- 루틴(Routine) 액션 ---
@@ -420,6 +447,7 @@ export const useAppStore = create<AppState>()(
         subRoutines = [],
       ) => {
         if (!title.trim()) return;
+        const now = Date.now();
         const newRoutine: RoutineItem = {
           id: generateId(),
           title: title.trim(),
@@ -429,6 +457,7 @@ export const useAppStore = create<AppState>()(
           order: get().routines.length,
           color,
           createdAt: new Date().toISOString(),
+          updatedAt: now,
           subRoutines: subRoutines
             .filter((s) => s.title && s.title.trim() !== '')
             .map((s) => ({
@@ -444,6 +473,7 @@ export const useAppStore = create<AppState>()(
 
       toggleRoutine: (id, dateStr) => {
         const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+        const now = Date.now();
         set((state) => ({
           routines: state.routines.map((routine) => {
             if (routine.id === id) {
@@ -471,6 +501,7 @@ export const useAppStore = create<AppState>()(
                 ...routine,
                 completedDates: updatedDates,
                 subRoutines: updatedSubRoutines,
+                updatedAt: now,
               };
             }
             return routine;
@@ -480,6 +511,7 @@ export const useAppStore = create<AppState>()(
 
       toggleSubRoutine: (routineId, subRoutineId, dateStr) => {
         const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+        const now = Date.now();
         set((state) => ({
           routines: state.routines.map((routine) => {
             if (routine.id === routineId && routine.subRoutines) {
@@ -514,6 +546,7 @@ export const useAppStore = create<AppState>()(
                 ...routine,
                 completedDates: updatedParentDates,
                 subRoutines: updatedSubRoutines,
+                updatedAt: now,
               };
             }
             return routine;
@@ -524,19 +557,22 @@ export const useAppStore = create<AppState>()(
       removeRoutine: (id) => {
         set((state) => ({
           routines: state.routines.filter((r) => r.id !== id),
+          deletedRoutineIds: [...(state.deletedRoutineIds || []).slice(-100), id],
         }));
       },
 
       updateRoutine: (id, title, icon, repeatDays, color, subRoutines) => {
+        const now = Date.now();
         set((state) => ({
           routines: state.routines.map((routine) => {
             if (routine.id === id) {
               return {
                 ...routine,
                 title,
-                icon,
-                repeatDays,
+                icon: icon || routine.icon,
+                repeatDays: repeatDays.length === 0 ? [0, 1, 2, 3, 4, 5, 6] : repeatDays,
                 color: color !== undefined ? color : routine.color,
+                updatedAt: now,
                 subRoutines: (subRoutines || []).map((s) => {
                   const existing = routine.subRoutines?.find((old) => old.id === s.id);
                   return {
@@ -553,12 +589,22 @@ export const useAppStore = create<AppState>()(
       },
 
       reorderRoutines: (newRoutines) => {
-        set({ routines: newRoutines });
+        const now = Date.now();
+        set({
+          routines: newRoutines.map((r, idx) => ({ ...r, order: idx, updatedAt: now })),
+        });
       },
     }),
     {
       name: 'tida-mobile-storage',
       storage: createJSONStorage(() => AsyncStorage),
+      version: 3,
+      migrate: (persistedState: any, version: number) => {
+        if (version < 3 && persistedState) {
+          persistedState.messageOrder = 'bottom';
+        }
+        return persistedState;
+      },
     },
   ),
 );

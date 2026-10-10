@@ -14,6 +14,7 @@ export interface RoutineItem {
   color?: string;
   createdAt: string;
   subRoutines?: SubRoutine[];
+  updatedAt?: number;
 }
 
 export const PRESET_EMOJIS = [
