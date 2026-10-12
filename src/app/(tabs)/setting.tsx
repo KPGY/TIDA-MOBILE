@@ -36,6 +36,7 @@ import { useAppStore, ThemeColors, GradientColors, SavedTheme } from '@/store/st
 import { resetDiaryDatabase } from '@/services/db';
 import { hexToRgba, getContrastMode } from '@/utils/colorHelper';
 import { generateThemeFromSingleColor, autoMatchColorsFromImage } from '@/utils/autoColorMatcher';
+import { LinearGradient } from 'expo-linear-gradient';
 import { AppBackground } from '@/components/AppBackground';
 import { ColorPickerModal } from '@/components/ColorPickerModal';
 import {
@@ -191,12 +192,28 @@ export default function SettingScreen() {
   const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
 
-  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.78) : panelTheme;
+  const cardBgAlpha = glassmorphismMode ? 0.65 : 1;
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme;
   const cardBorder = glassmorphismMode
     ? isPanelDark
-      ? 'rgba(255,255,255,0.18)'
+      ? 'rgba(255,255,255,0.2)'
       : 'rgba(0,0,0,0.1)'
     : 'rgba(0,0,0,0.06)';
+
+  const renderCardGradient = (borderRadius?: number) =>
+    gradientMode ? (
+      <LinearGradient
+        colors={[
+          glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
+          glassmorphismMode
+            ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
+            : (panelThemeEnd || panelTheme),
+        ]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[StyleSheet.absoluteFill, borderRadius !== undefined ? { borderRadius } : null]}
+      />
+    ) : null;
 
   // 현재 선택된 영역의 색상값
   const currentColor = useAppStore((state) => state[activeZone]);
@@ -404,7 +421,13 @@ export default function SettingScreen() {
             <Text style={[styles.sectionTitle, { color: textColor }]}>배경 화면 이미지</Text>
           </View>
 
-          <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+          <View
+            style={[
+              styles.card,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(18)}
             {/* 이미지 미리보기 */}
             <View style={styles.bgPreviewRow}>
               {bgAttachmentPath ? (
@@ -538,7 +561,13 @@ export default function SettingScreen() {
             })}
           </View>
 
-          <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+          <View
+            style={[
+              styles.card,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(18)}
             {/* 현재 색상 표시 & 컬러 피커 열기 버튼 */}
             <TouchableOpacity
               style={[
@@ -713,8 +742,13 @@ export default function SettingScreen() {
                     key={theme.id}
                     style={[
                       styles.savedThemeCard,
-                      { backgroundColor: cardBg, borderColor: isActive ? mainTheme : cardBorder },
+                      !gradientMode && { backgroundColor: cardBg },
+                      {
+                        borderColor: isActive ? mainTheme : cardBorder,
+                        overflow: 'hidden',
+                      },
                     ]}>
+                    {renderCardGradient(14)}
                     <View style={styles.presetColorCircles}>
                       <View style={[styles.colorDot, { backgroundColor: theme.bgTheme }]} />
                       <View style={[styles.colorDot, { backgroundColor: theme.mainTheme }]} />
@@ -776,8 +810,13 @@ export default function SettingScreen() {
                   onPress={() => applyPreset(preset)}
                   style={[
                     styles.presetCard,
-                    { backgroundColor: cardBg, borderColor: isCurrent ? mainTheme : cardBorder },
+                    !gradientMode && { backgroundColor: cardBg },
+                    {
+                      borderColor: isCurrent ? mainTheme : cardBorder,
+                      overflow: 'hidden',
+                    },
                   ]}>
+                  {renderCardGradient(16)}
                   <View style={styles.presetColorCircles}>
                     <View style={[styles.colorDot, { backgroundColor: preset.bg }]} />
                     <View style={[styles.colorDot, { backgroundColor: preset.main }]} />
@@ -800,7 +839,13 @@ export default function SettingScreen() {
             <Text style={[styles.sectionTitle, { color: textColor }]}>화면 및 정렬 설정</Text>
           </View>
 
-          <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+          <View
+            style={[
+              styles.card,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(18)}
             <View style={styles.settingRow}>
               <View>
                 <Text style={[styles.cardLabel, { color: cardTextColor }]}>
@@ -852,7 +897,13 @@ export default function SettingScreen() {
             <Cloud size={18} color={mainTheme} />
             <Text style={[styles.sectionTitle, { color: textColor }]}>구글 드라이브 연동 & 백업</Text>
           </View>
-          <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+          <View
+            style={[
+              styles.card,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(18)}
             {/* 구글 계정 상태 */}
             {googleUser ? (
               <View style={styles.googleUserRow}>
@@ -981,7 +1032,13 @@ export default function SettingScreen() {
             <RefreshCw size={18} color="#EF4444" />
             <Text style={[styles.sectionTitle, { color: '#EF4444' }]}>데이터 초기화</Text>
           </View>
-          <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+          <View
+            style={[
+              styles.card,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(18)}
             <Text style={[styles.cardDesc, { color: cardSubTextColor, marginBottom: 14, lineHeight: 18 }]}>
               모든 타임라인 일기, 투두 및 루틴 기록과 테마 설정을 초기 상태로 되돌립니다.
             </Text>
@@ -1032,7 +1089,13 @@ export default function SettingScreen() {
       {/* 테마 저장 모달 */}
       <Modal visible={saveModalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalBox, { backgroundColor: panelTheme }]}>
+          <View
+            style={[
+              styles.modalBox,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(20)}
             <Text style={[styles.modalTitle, { color: cardTextColor }]}>내 테마로 저장</Text>
             <Text style={[styles.modalSubtitle, { color: cardSubTextColor }]}>
               현재 적용된 색상과 배경 조합을 저장합니다.

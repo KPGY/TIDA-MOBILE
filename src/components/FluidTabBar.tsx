@@ -24,7 +24,15 @@ import { Tabs } from 'expo-router';
 export type FluidTabBarProps = NonNullable<ComponentProps<typeof Tabs>['tabBar']> extends (props: infer P) => any ? P : any;
 
 export function FluidTabBar({ state, descriptors, navigation }: FluidTabBarProps) {
-  const { mainTheme, mainThemeEnd, panelTheme, panelTextMode, gradientMode } = useAppStore();
+  const {
+    mainTheme,
+    mainThemeEnd,
+    panelTheme,
+    panelThemeEnd,
+    panelTextMode,
+    gradientMode,
+    glassmorphismMode,
+  } = useAppStore();
   const isDark = panelTextMode === 'light';
   const insets = useSafeAreaInsets();
 
@@ -104,16 +112,40 @@ export function FluidTabBar({ state, descriptors, navigation }: FluidTabBarProps
 
   const inactiveColor = isDark ? '#94A3B8' : '#64748B';
 
+  const barBgAlpha = glassmorphismMode ? 0.70 : 1;
+  const barBg = glassmorphismMode ? hexToRgba(panelTheme, barBgAlpha) : panelTheme;
+  const barBorder = glassmorphismMode
+    ? isDark
+      ? 'rgba(255,255,255,0.2)'
+      : 'rgba(0,0,0,0.08)'
+    : isDark
+      ? '#334155'
+      : '#E2E8F0';
+
   return (
     <View
       style={[
         styles.outerContainer,
+        !gradientMode && { backgroundColor: barBg },
         {
-          backgroundColor: panelTheme,
-          borderTopColor: isDark ? '#334155' : '#E2E8F0',
+          borderTopColor: barBorder,
           paddingBottom: bottomPadding,
+          overflow: 'hidden',
         },
       ]}>
+      {gradientMode && (
+        <LinearGradient
+          colors={[
+            glassmorphismMode ? hexToRgba(panelTheme, barBgAlpha) : panelTheme,
+            glassmorphismMode
+              ? hexToRgba(panelThemeEnd || panelTheme, barBgAlpha)
+              : (panelThemeEnd || panelTheme),
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+      )}
       {/* 
         버튼 및 인디케이터 영역: 높이 54dp로 고정하고 overflow hidden을 적용하여
         어떠한 터치 효과도 하단 네비게이션 바로 절대 새어나가지 않습니다.

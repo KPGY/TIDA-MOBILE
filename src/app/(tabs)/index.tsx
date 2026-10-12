@@ -416,8 +416,15 @@ export default function TimelineScreen() {
   const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
 
-  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
-  const bubbleBg = glassmorphismMode ? hexToRgba(bubbleTheme, 0.88) : bubbleTheme;
+  const cardBgAlpha = glassmorphismMode ? 0.65 : 1;
+  const bubbleBgAlpha = glassmorphismMode ? 0.70 : 1;
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme;
+  const bubbleBg = glassmorphismMode ? hexToRgba(bubbleTheme, bubbleBgAlpha) : bubbleTheme;
+  const cardBorder = glassmorphismMode
+    ? isPanelDark
+      ? 'rgba(255,255,255,0.2)'
+      : 'rgba(0,0,0,0.08)'
+    : 'rgba(0,0,0,0.06)';
 
   const { width: windowWidth } = useWindowDimensions();
   // 양쪽 패딩(28px) + 시간 뱃지(~54px) + 삭제 버튼(~26px) + 안전 여백(18px) = 126 제외하여 우측 프레임 밖 튀어나감 완전 방지
@@ -751,7 +758,12 @@ export default function TimelineScreen() {
           ]}>
           {gradientMode && (
             <LinearGradient
-              colors={[bubbleTheme, bubbleThemeEnd || bubbleTheme]}
+              colors={[
+                glassmorphismMode ? hexToRgba(bubbleTheme, bubbleBgAlpha) : bubbleTheme,
+                glassmorphismMode
+                  ? hexToRgba(bubbleThemeEnd || bubbleTheme, bubbleBgAlpha)
+                  : (bubbleThemeEnd || bubbleTheme),
+              ]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={StyleSheet.absoluteFill}
@@ -804,7 +816,25 @@ export default function TimelineScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}>
         {/* Top Header & Date Navigation */}
-        <View style={[styles.header, { backgroundColor: cardBg }]}>
+        <View
+          style={[
+            styles.header,
+            !gradientMode && { backgroundColor: cardBg },
+            { borderBottomColor: cardBorder, overflow: 'hidden' },
+          ]}>
+          {gradientMode && (
+            <LinearGradient
+              colors={[
+                glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
+                glassmorphismMode
+                  ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
+                  : (panelThemeEnd || panelTheme),
+              ]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
           {isSearching ? (
             <View style={styles.searchBarContainer}>
               <Search size={18} color={cardSubTextColor} />
@@ -937,7 +967,25 @@ export default function TimelineScreen() {
 
         {/* Selected Images Horizontal Thumbnail Preview */}
         {selectedImages.length > 0 && (
-          <View style={[styles.imagePreviewBar, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.imagePreviewBar,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderTopColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {gradientMode && (
+              <LinearGradient
+                colors={[
+                  glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
+                  glassmorphismMode
+                    ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
+                    : (panelThemeEnd || panelTheme),
+                ]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+            )}
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -979,7 +1027,25 @@ export default function TimelineScreen() {
 
         {/* Bottom Input Bar */}
         {!isSearching && (
-          <View style={[styles.inputBar, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.inputBar,
+              !gradientMode && { backgroundColor: cardBg },
+              { borderTopColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {gradientMode && (
+              <LinearGradient
+                colors={[
+                  glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
+                  glassmorphismMode
+                    ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
+                    : (panelThemeEnd || panelTheme),
+                ]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+            )}
             <TouchableOpacity onPress={handlePickImage} style={styles.iconBtn}>
               <ImageIcon
                 size={22}

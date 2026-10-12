@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, AppState } from 'react-native';
 import { Flame, CheckCircle2, Award, Calendar, TrendingUp } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAppStore } from '@/store/store';
 import { hexToRgba } from '@/utils/colorHelper';
 import { AppBackground } from '@/components/AppBackground';
@@ -13,7 +14,18 @@ import {
 } from '@/utils/routineHelper';
 
 export default function StatsScreen() {
-  const { bgTheme, panelTheme, mainTheme, bgTextMode, panelTextMode, glassmorphismMode, routines, todos } = useAppStore();
+  const {
+    bgTheme,
+    panelTheme,
+    panelThemeEnd,
+    mainTheme,
+    gradientMode,
+    bgTextMode,
+    panelTextMode,
+    glassmorphismMode,
+    routines,
+    todos,
+  } = useAppStore();
 
   const [todayStr, setTodayStr] = useState<string>(getTodayStr());
 
@@ -67,7 +79,29 @@ export default function StatsScreen() {
   const isPanelDark = panelTextMode === 'light';
   const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
-  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
+
+  const cardBgAlpha = glassmorphismMode ? 0.65 : 1;
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme;
+  const cardBorder = glassmorphismMode
+    ? isPanelDark
+      ? 'rgba(255,255,255,0.2)'
+      : 'rgba(0,0,0,0.08)'
+    : 'transparent';
+
+  const renderCardGradient = (borderRadius?: number) =>
+    gradientMode ? (
+      <LinearGradient
+        colors={[
+          glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
+          glassmorphismMode
+            ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
+            : (panelThemeEnd || panelTheme),
+        ]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[StyleSheet.absoluteFill, borderRadius !== undefined ? { borderRadius } : null]}
+      />
+    ) : null;
 
   // Statistics calculations
   const stats = useMemo(() => {
@@ -124,7 +158,14 @@ export default function StatsScreen() {
         {/* 3 Summary Metric Cards */}
         <View style={styles.metricsRow}>
           {/* Card 1: Today Routines */}
-          <View style={[styles.metricCard, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.metricCard,
+              !gradientMode && { backgroundColor: cardBg },
+              glassmorphismMode && styles.glassCard,
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(16)}
             <View style={[styles.iconCircle, { backgroundColor: 'rgba(59,130,246,0.1)' }]}>
               <TrendingUp size={20} color={mainTheme} />
             </View>
@@ -147,7 +188,14 @@ export default function StatsScreen() {
           </View>
 
           {/* Card 2: Max Streak */}
-          <View style={[styles.metricCard, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.metricCard,
+              !gradientMode && { backgroundColor: cardBg },
+              glassmorphismMode && styles.glassCard,
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(16)}
             <View style={[styles.iconCircle, { backgroundColor: '#FFEDD5' }]}>
               <Flame size={20} color="#EA580C" />
             </View>
@@ -161,7 +209,14 @@ export default function StatsScreen() {
           </View>
 
           {/* Card 3: Todos Done */}
-          <View style={[styles.metricCard, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.metricCard,
+              !gradientMode && { backgroundColor: cardBg },
+              glassmorphismMode && styles.glassCard,
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(16)}
             <View style={[styles.iconCircle, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
               <CheckCircle2 size={20} color="#10B981" />
             </View>
@@ -189,7 +244,14 @@ export default function StatsScreen() {
           <Text style={[styles.sectionTitle, { color: textColor }]}>최근 7일간의 루틴 실천</Text>
 
           {routines.length === 0 ? (
-            <View style={[styles.emptyCard, { backgroundColor: cardBg }]}>
+            <View
+              style={[
+                styles.emptyCard,
+                !gradientMode && { backgroundColor: cardBg },
+                glassmorphismMode && styles.glassCard,
+                { borderColor: cardBorder, overflow: 'hidden' },
+              ]}>
+              {renderCardGradient(16)}
               <Text style={[styles.emptyText, { color: cardSubTextColor }]}>
                 등록된 루틴이 없습니다.
               </Text>
@@ -201,7 +263,15 @@ export default function StatsScreen() {
                 const streak = calculateStreak(routine.completedDates, routine.repeatDays);
 
                 return (
-                  <View key={routine.id} style={[styles.routineStatCard, { backgroundColor: cardBg }]}>
+                  <View
+                    key={routine.id}
+                    style={[
+                      styles.routineStatCard,
+                      !gradientMode && { backgroundColor: cardBg },
+                      glassmorphismMode && styles.glassCard,
+                      { borderColor: cardBorder, overflow: 'hidden' },
+                    ]}>
+                    {renderCardGradient(16)}
                     <View style={styles.routineStatTop}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <Text style={{ fontSize: 24 }}>{routine.icon}</Text>
@@ -293,6 +363,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 5,
     elevation: 2,
+  },
+  glassCard: {
+    borderWidth: 1,
   },
   iconCircle: {
     width: 36,

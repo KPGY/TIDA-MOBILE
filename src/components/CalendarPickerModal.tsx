@@ -51,7 +51,7 @@ export function CalendarPickerModal({
   const textColor = isDark ? '#F8FAFC' : '#0F172A';
   const subTextColor = isDark ? '#94A3B8' : '#64748B';
   const borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)';
-  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.95) : panelTheme;
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.82) : panelTheme;
 
   const todayStr = useMemo(() => getTodayStr(), []);
 

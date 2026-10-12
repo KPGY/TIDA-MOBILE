@@ -42,6 +42,7 @@ export default function TodoScreen() {
     bgTheme,
     bubbleTheme,
     panelTheme,
+    panelThemeEnd,
     mainTheme,
     mainThemeEnd,
     gradientMode,
@@ -128,7 +129,28 @@ export default function TodoScreen() {
   const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
 
-  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
+  const cardBgAlpha = glassmorphismMode ? 0.65 : 1;
+  const cardBg = glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme;
+  const cardBorder = glassmorphismMode
+    ? isPanelDark
+      ? 'rgba(255,255,255,0.2)'
+      : 'rgba(0,0,0,0.08)'
+    : 'transparent';
+
+  const renderCardGradient = (borderRadius?: number) =>
+    gradientMode ? (
+      <LinearGradient
+        colors={[
+          glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
+          glassmorphismMode
+            ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
+            : (panelThemeEnd || panelTheme),
+        ]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[StyleSheet.absoluteFill, borderRadius !== undefined ? { borderRadius } : null]}
+      />
+    ) : null;
 
   // Toggle todo with haptic feedback
   const handleToggleTodo = (id: string) => {
@@ -247,7 +269,14 @@ export default function TodoScreen() {
         </View>
 
         {routines.length === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.emptyCard,
+              !gradientMode && { backgroundColor: cardBg },
+              glassmorphismMode && styles.glassCard,
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(16)}
             <Text style={[styles.emptyCardText, { color: cardSubTextColor }]}>
               등록된 루틴이 없습니다.{'\n'}매일 실천할 작은 습관을 등록해보세요! 💧
             </Text>
@@ -259,7 +288,15 @@ export default function TodoScreen() {
               const streak = calculateStreak(item.completedDates, item.repeatDays);
 
               return (
-                <View key={item.id} style={[styles.routineCard, { backgroundColor: cardBg }]}>
+                <View
+                  key={item.id}
+                  style={[
+                    styles.routineCard,
+                    !gradientMode && { backgroundColor: cardBg },
+                    glassmorphismMode && styles.glassCard,
+                    { borderColor: cardBorder, overflow: 'hidden' },
+                  ]}>
+                  {renderCardGradient(16)}
                   <TouchableOpacity
                     style={styles.routineLeft}
                     onPress={() => handleToggleRoutine(item.id)}>
@@ -350,7 +387,14 @@ export default function TodoScreen() {
         </View>
 
         {todos.length === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.emptyCard,
+              !gradientMode && { backgroundColor: cardBg },
+              glassmorphismMode && styles.glassCard,
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(16)}
             <Text style={[styles.emptyCardText, { color: cardSubTextColor }]}>
               할 일이 없습니다.{'\n'}새로운 할 일을 추가하고 오늘 하루를 알차게 채워보세요! ✨
             </Text>
@@ -364,7 +408,15 @@ export default function TodoScreen() {
               const subPercent = totalSubs > 0 ? Math.round((doneSubs / totalSubs) * 100) : null;
 
               return (
-                <View key={todo.id} style={[styles.todoCard, { backgroundColor: cardBg }]}>
+                <View
+                  key={todo.id}
+                  style={[
+                    styles.todoCard,
+                    !gradientMode && { backgroundColor: cardBg },
+                    glassmorphismMode && styles.glassCard,
+                    { borderColor: cardBorder, overflow: 'hidden' },
+                  ]}>
+                  {renderCardGradient(16)}
                   {/* Main Todo Row */}
                   <View style={styles.todoMainRow}>
                     <TouchableOpacity
@@ -510,7 +562,14 @@ export default function TodoScreen() {
         animationType="slide"
         onRequestClose={() => setIsTodoModalOpen(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.modalSheet,
+              !gradientMode && { backgroundColor: cardBg },
+              glassmorphismMode && styles.glassCard,
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(24)}
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: cardTextColor }]}>새 할 일 추가</Text>
               <TouchableOpacity onPress={() => setIsTodoModalOpen(false)}>
@@ -587,7 +646,14 @@ export default function TodoScreen() {
         animationType="slide"
         onRequestClose={() => setIsRoutineModalOpen(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: cardBg }]}>
+          <View
+            style={[
+              styles.modalSheet,
+              !gradientMode && { backgroundColor: cardBg },
+              glassmorphismMode && styles.glassCard,
+              { borderColor: cardBorder, overflow: 'hidden' },
+            ]}>
+            {renderCardGradient(24)}
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: cardTextColor }]}>새 루틴 추가</Text>
               <TouchableOpacity onPress={() => setIsRoutineModalOpen(false)}>
@@ -733,6 +799,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  glassCard: {
+    borderWidth: 1,
   },
   emptyCardText: {
     fontSize: 14,
