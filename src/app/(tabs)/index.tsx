@@ -5,6 +5,7 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
+  ScrollView,
   Image,
   StyleSheet,
   KeyboardAvoidingView,
@@ -13,6 +14,8 @@ import {
   Keyboard,
   useWindowDimensions,
   ActivityIndicator,
+  Linking,
+  AppState,
 } from 'react-native';
 import { showAlert } from '@/services/alert';
 import {
@@ -25,11 +28,13 @@ import {
   X,
   Calendar,
   RotateCcw,
+  Plus,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAppStore } from '@/store/store';
 import { hexToRgba } from '@/utils/colorHelper';
 import { AppBackground } from '@/components/AppBackground';
@@ -243,12 +248,82 @@ const AdaptiveImage: React.FC<AdaptiveImageProps> = ({
   );
 };
 
+// 타임라인 메시지 본문 렌더링 컴포넌트 (URL 자동 감지 및 하이퍼링크 바로가기 지원)
+interface TimelineMessageTextProps {
+  content: string;
+  bubbleTextColor: string;
+  isBubbleDark: boolean;
+}
+
+const TimelineMessageText: React.FC<TimelineMessageTextProps> = ({
+  content,
+  bubbleTextColor,
+  isBubbleDark,
+}) => {
+  if (!content) return null;
+
+  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+  const parts = content.split(urlRegex);
+
+  const handleOpenLink = async (rawUrl: string) => {
+    let target = rawUrl.trim();
+    if (target.startsWith('www.')) {
+      target = `https://${target}`;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await Linking.openURL(target);
+    } catch (e) {
+      showAlert('링크 열기 실패', '해당 웹 페이지를 열 수 없습니다.');
+    }
+  };
+
+  const linkColor = isBubbleDark ? '#60A5FA' : '#2563EB';
+
+  return (
+    <Text
+      style={[
+        styles.bubbleText,
+        {
+          color: bubbleTextColor,
+          textShadowColor: isBubbleDark ? 'rgba(0,0,0,0.32)' : 'rgba(255,255,255,0.4)',
+          textShadowOffset: { width: 0, height: 0.5 },
+          textShadowRadius: 1,
+        },
+      ]}>
+      {parts.map((part, index) => {
+        if (!part) return null;
+        if (/^(https?:\/\/|www\.)/i.test(part)) {
+          return (
+            <Text
+              key={index}
+              onPress={() => handleOpenLink(part)}
+              style={{
+                color: linkColor,
+                textDecorationLine: 'underline',
+                fontWeight: '600',
+              }}>
+              {part}
+            </Text>
+          );
+        }
+        return <Text key={index}>{part}</Text>;
+      })}
+    </Text>
+  );
+};
+
 export default function TimelineScreen() {
   const {
     bgTheme,
     bubbleTheme,
     panelTheme,
     mainTheme,
+    bgThemeEnd,
+    bubbleThemeEnd,
+    panelThemeEnd,
+    mainThemeEnd,
+    gradientMode,
     bgTextMode,
     bubbleTextMode,
     panelTextMode,
@@ -259,7 +334,7 @@ export default function TimelineScreen() {
   const [currentDate, setCurrentDate] = useState<string>(getTodayStr());
   const [entries, setEntries] = useState<DiaryItem[]>([]);
   const [inputText, setInputText] = useState<string>('');
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
 
   // Search state
   const [isSearching, setIsSearching] = useState<boolean>(false);
@@ -273,6 +348,61 @@ export default function TimelineScreen() {
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
+
+  // 12시(자정) 넘었을 때 일자 자동 갱신 리스너 & 타이머
+  useEffect(() => {
+    const checkAndAdvanceDate = () => {
+      const today = getTodayStr();
+      setCurrentDate((prev) => {
+        // 어제 날짜를 보고 있었거나(이전의 오늘), 오늘 날짜에 머물러 있었다면 새 오늘로 자동 변경
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = getTodayStr(yesterday);
+        if (prev === yesterdayStr || prev === today) {
+          return today;
+        }
+        return prev;
+      });
+    };
+
+    // 자정(00:00:01) 원샷 타이머 설정
+    const setupMidnightTimer = () => {
+      const now = new Date();
+      const nextMidnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        1,
+      );
+      const delay = Math.max(1000, nextMidnight.getTime() - now.getTime());
+      return setTimeout(() => {
+        checkAndAdvanceDate();
+        timerRef.current = setupMidnightTimer();
+      }, delay);
+    };
+
+    const timerRef = { current: setupMidnightTimer() };
+
+    // 앱 복귀(active) 시 오늘 날짜 지남 여부 검사
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        checkAndAdvanceDate();
+        clearTimeout(timerRef.current);
+        timerRef.current = setupMidnightTimer();
+      }
+    });
+
+    // 30초 주기 안전장치
+    const interval = setInterval(checkAndAdvanceDate, 30000);
+
+    return () => {
+      clearTimeout(timerRef.current);
+      clearInterval(interval);
+      appStateSub.remove();
+    };
+  }, []);
 
   const isBgDark = bgTextMode === 'light';
   const textColor = isBgDark ? '#F8FAFC' : '#0F172A';
@@ -420,83 +550,100 @@ export default function TimelineScreen() {
     }
   };
 
-  // Image Pick
+  // Image Pick (다중 사진 선택 지원)
   const handlePickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: false,
+        allowsMultipleSelection: true,
         quality: 0.8,
+        selectionLimit: 10,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const asset = result.assets[0];
-        const rawUri = asset.uri;
-        // 1200px 초과 고해상도 사진만 비율 유지 리사이징 및 용량 최적화 (노크롭)
-        try {
-          const actions = asset.width && asset.width > 1200 ? [{ resize: { width: 1200 } }] : [];
-          const manipResult = await ImageManipulator.manipulateAsync(
-            rawUri,
-            actions,
-            { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
-          );
-          setSelectedImage(manipResult.uri);
-        } catch {
-          setSelectedImage(rawUri);
+        const newUris: string[] = [];
+        for (const asset of result.assets) {
+          const rawUri = asset.uri;
+          try {
+            const actions = asset.width && asset.width > 1200 ? [{ resize: { width: 1200 } }] : [];
+            const manipResult = await ImageManipulator.manipulateAsync(
+              rawUri,
+              actions,
+              { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+            );
+            newUris.push(manipResult.uri);
+          } catch {
+            newUris.push(rawUri);
+          }
         }
+        setSelectedImages((prev) => [...prev, ...newUris]);
       }
     } catch (error) {
       showAlert('사진 선택 오류', '갤러리에서 사진을 불러오는 중 오류가 발생했습니다.');
     }
   };
 
+  const handleRemoveSelectedImage = (indexToRemove: number) => {
+    setSelectedImages((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
   // Save Memo
   const handleSend = async () => {
     const trimmed = inputText.trim();
-    if (!trimmed && !selectedImage) return;
+    if (!trimmed && selectedImages.length === 0) return;
 
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
+    // 만약 사용자가 '오늘' 화면을 보고 있는 상태라면, 작성 시점의 정확한 최신 오늘 날짜를 기준으로 저장
+    const currentToday = getTodayStr();
+    const isCurrentlyToday = currentDate === currentToday;
+    const targetDate = isCurrentlyToday ? currentToday : currentDate;
+
     let attachmentsJson: string | null = null;
-    if (selectedImage) {
+    if (selectedImages.length > 0) {
       try {
         const attDir = `${FileSystem.documentDirectory}attachments/`;
         const dirInfo = await FileSystem.getInfoAsync(attDir);
         if (!dirInfo.exists) {
           await FileSystem.makeDirectoryAsync(attDir, { intermediates: true });
         }
-        const ext = selectedImage.split('.').pop() || 'jpg';
-        const fileName = `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
-        const targetPath = `${attDir}${fileName}`;
-        await FileSystem.copyAsync({ from: selectedImage, to: targetPath });
 
-        const attachments: Attachment[] = [
-          {
-            filePath: targetPath,
-            fileName: fileName,
-          },
-        ];
+        const attachments: Attachment[] = [];
+        for (const imgUri of selectedImages) {
+          try {
+            const ext = imgUri.split('.').pop() || 'jpg';
+            const fileName = `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+            const targetPath = `${attDir}${fileName}`;
+            await FileSystem.copyAsync({ from: imgUri, to: targetPath });
+            attachments.push({
+              filePath: targetPath,
+              fileName: fileName,
+            });
+          } catch (copyErr) {
+            attachments.push({
+              filePath: imgUri,
+              fileName: imgUri.split('/').pop() || 'image.jpg',
+            });
+          }
+        }
         attachmentsJson = JSON.stringify(attachments);
       } catch (err) {
-        console.warn('Failed to copy attachment permanently, fallback to original:', err);
-        const attachments: Attachment[] = [
-          {
-            filePath: selectedImage,
-            fileName: selectedImage.split('/').pop() || 'image.jpg',
-          },
-        ];
-        attachmentsJson = JSON.stringify(attachments);
+        console.warn('Failed to process attachments:', err);
       }
     }
 
     try {
-      saveDiary(trimmed, currentDate, timeStr, attachmentsJson);
+      saveDiary(trimmed, targetDate, timeStr, attachmentsJson);
       // 사진이 있으면 즉시(0ms), 텍스트만 있으면 500ms 후 빠르게 클라우드 동기화하여 탭 전환 시 누락 방지
-      triggerAutoSync(selectedImage ? 0 : 500);
+      triggerAutoSync(selectedImages.length > 0 ? 0 : 500);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setInputText('');
-      setSelectedImage(null);
+      setSelectedImages([]);
+      if (isCurrentlyToday && currentDate !== currentToday) {
+        setCurrentDate(currentToday);
+      }
       loadEntries();
       setTimeout(() => {
         if (flatListRef.current && !shouldAlignBottom) {
@@ -597,24 +744,26 @@ export default function TimelineScreen() {
           onLongPress={() => handleDelete(item.id)}
           style={[
             styles.speechBubble,
-            { backgroundColor: bubbleBg },
+            !gradientMode && { backgroundColor: bubbleBg },
             glassmorphismMode && styles.glassBubble,
             isImageOnly && styles.imageOnlyBubble,
             { maxWidth: maxBubbleWidth },
           ]}>
+          {gradientMode && (
+            <LinearGradient
+              colors={[bubbleTheme, bubbleThemeEnd || bubbleTheme]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
+
           {hasText ? (
-            <Text
-              style={[
-                styles.bubbleText,
-                {
-                  color: bubbleTextColor,
-                  textShadowColor: isBubbleDark ? 'rgba(0,0,0,0.32)' : 'rgba(255,255,255,0.4)',
-                  textShadowOffset: { width: 0, height: 0.5 },
-                  textShadowRadius: 1,
-                },
-              ]}>
-              {item.content}
-            </Text>
+            <TimelineMessageText
+              content={item.content}
+              bubbleTextColor={bubbleTextColor}
+              isBubbleDark={isBubbleDark}
+            />
           ) : null}
 
           {/* 사진 썸네일 (원본 비율 완벽 유지 & 짤림 방지 노크롭) */}
@@ -786,36 +935,45 @@ export default function TimelineScreen() {
           }
         />
 
-        {/* Selected Image Thumbnail Preview */}
-        {selectedImage && (
+        {/* Selected Images Horizontal Thumbnail Preview */}
+        {selectedImages.length > 0 && (
           <View style={[styles.imagePreviewBar, { backgroundColor: cardBg }]}>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => setPreviewImageUrl(selectedImage)}
-              style={styles.previewThumbnailWrapper}>
-              <Image
-                source={{ uri: selectedImage }}
-                style={styles.thumbnail}
-                resizeMode="cover"
-              />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.previewScrollContent}>
+              {selectedImages.map((imgUri, index) => (
+                <View key={`${imgUri}_${index}`} style={styles.previewThumbnailWrapper}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setPreviewImageUrl(imgUri)}>
+                    <Image
+                      source={{ uri: imgUri }}
+                      style={styles.thumbnail}
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.removeImageBtn}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    onPress={() => handleRemoveSelectedImage(index)}>
+                    <X size={13} color="#FFFFFF" strokeWidth={2.5} />
+                  </TouchableOpacity>
+                </View>
+              ))}
               <TouchableOpacity
-                style={styles.removeImageBtn}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                onPress={() => setSelectedImage(null)}>
-                <X size={13} color="#FFFFFF" strokeWidth={2.5} />
+                style={[
+                  styles.addMorePhotoBtn,
+                  { borderColor: isPanelDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' },
+                ]}
+                onPress={handlePickImage}
+                activeOpacity={0.7}>
+                <Plus size={18} color={mainTheme} />
+                <Text style={[styles.addMorePhotoText, { color: cardSubTextColor }]}>
+                  {selectedImages.length}장
+                </Text>
               </TouchableOpacity>
-            </TouchableOpacity>
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => setPreviewImageUrl(selectedImage)}
-              style={styles.previewInfoContainer}>
-              <Text style={[styles.previewInfoTitle, { color: cardTextColor }]}>
-                첨부 사진 1장
-              </Text>
-              <Text style={[styles.previewInfoSubtitle, { color: cardSubTextColor }]}>
-                터치하여 전체 크기 미리보기
-              </Text>
-            </TouchableOpacity>
+            </ScrollView>
           </View>
         )}
 
@@ -823,7 +981,10 @@ export default function TimelineScreen() {
         {!isSearching && (
           <View style={[styles.inputBar, { backgroundColor: cardBg }]}>
             <TouchableOpacity onPress={handlePickImage} style={styles.iconBtn}>
-              <ImageIcon size={22} color={selectedImage ? mainTheme : cardSubTextColor} />
+              <ImageIcon
+                size={22}
+                color={selectedImages.length > 0 ? mainTheme : cardSubTextColor}
+              />
             </TouchableOpacity>
 
             <TextInput
@@ -838,14 +999,26 @@ export default function TimelineScreen() {
 
             <TouchableOpacity
               onPress={handleSend}
-              disabled={!inputText.trim() && !selectedImage}
+              disabled={!inputText.trim() && selectedImages.length === 0}
               style={[
                 styles.sendBtn,
-                {
+                !gradientMode && {
                   backgroundColor:
-                    inputText.trim() || selectedImage ? mainTheme : isPanelDark ? '#334155' : '#CBD5E1',
+                    inputText.trim() || selectedImages.length > 0
+                      ? mainTheme
+                      : isPanelDark
+                        ? '#334155'
+                        : '#CBD5E1',
                 },
               ]}>
+              {gradientMode && (inputText.trim() || selectedImages.length > 0) && (
+                <LinearGradient
+                  colors={[mainTheme, mainThemeEnd || mainTheme]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={StyleSheet.absoluteFill}
+                />
+              )}
               <Send size={18} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
@@ -1048,12 +1221,14 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   imagePreviewBar: {
-    paddingHorizontal: 16,
     paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
     borderTopWidth: 1,
     borderTopColor: 'rgba(0,0,0,0.06)',
+  },
+  previewScrollContent: {
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 12,
   },
   previewThumbnailWrapper: {
@@ -1078,17 +1253,19 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#FFFFFF',
   },
-  previewInfoContainer: {
-    flex: 1,
+  addMorePhotoBtn: {
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    alignItems: 'center',
     justifyContent: 'center',
+    gap: 2,
   },
-  previewInfoTitle: {
-    fontSize: 13,
+  addMorePhotoText: {
+    fontSize: 10,
     fontWeight: '600',
-    marginBottom: 2,
-  },
-  previewInfoSubtitle: {
-    fontSize: 11,
   },
   inputBar: {
     flexDirection: 'row',

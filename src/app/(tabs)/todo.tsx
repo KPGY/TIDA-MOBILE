@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Modal,
+  AppState,
 } from 'react-native';
 import { showAlert } from '@/services/alert';
 import {
@@ -21,6 +22,7 @@ import {
   Sparkles,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAppStore, Todolist } from '@/store/store';
 import { hexToRgba } from '@/utils/colorHelper';
 import { AppBackground } from '@/components/AppBackground';
@@ -41,6 +43,8 @@ export default function TodoScreen() {
     bubbleTheme,
     panelTheme,
     mainTheme,
+    mainThemeEnd,
+    gradientMode,
     bgTextMode,
     panelTextMode,
     glassmorphismMode,
@@ -71,6 +75,51 @@ export default function TodoScreen() {
   // Inline sub-todo input
   const [inlineSubText, setInlineSubText] = useState<Record<string, string>>({});
 
+  const [todayStr, setTodayStr] = useState<string>(getTodayStr());
+
+  // 12시(자정) 넘었을 때 오늘 날짜 자동 갱신 리스너 & 타이머
+  useEffect(() => {
+    const checkMidnight = () => {
+      const current = getTodayStr();
+      setTodayStr((prev) => (prev !== current ? current : prev));
+    };
+
+    const setupMidnightTimer = () => {
+      const now = new Date();
+      const nextMidnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        1,
+      );
+      const delay = Math.max(1000, nextMidnight.getTime() - now.getTime());
+      return setTimeout(() => {
+        checkMidnight();
+        timerRef.current = setupMidnightTimer();
+      }, delay);
+    };
+
+    const timerRef = { current: setupMidnightTimer() };
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        checkMidnight();
+        clearTimeout(timerRef.current);
+        timerRef.current = setupMidnightTimer();
+      }
+    });
+
+    const interval = setInterval(checkMidnight, 30000);
+
+    return () => {
+      clearTimeout(timerRef.current);
+      clearInterval(interval);
+      appStateSub.remove();
+    };
+  }, []);
+
   const isBgDark = bgTextMode === 'light';
   const textColor = isBgDark ? '#F8FAFC' : '#0F172A';
   const subTextColor = isBgDark ? '#94A3B8' : '#64748B';
@@ -80,8 +129,6 @@ export default function TodoScreen() {
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
 
   const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
-
-  const todayStr = getTodayStr();
 
   // Toggle todo with haptic feedback
   const handleToggleTodo = (id: string) => {
@@ -250,8 +297,18 @@ export default function TodoScreen() {
                       onPress={() => handleToggleRoutine(item.id)}
                       style={[
                         styles.checkCircle,
-                        isDone ? { backgroundColor: mainTheme, borderColor: mainTheme } : { borderColor: cardSubTextColor },
+                        isDone
+                          ? { backgroundColor: gradientMode ? 'transparent' : mainTheme, borderColor: mainTheme }
+                          : { borderColor: cardSubTextColor },
                       ]}>
+                      {isDone && gradientMode && (
+                        <LinearGradient
+                          colors={[mainTheme, mainThemeEnd || mainTheme]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={StyleSheet.absoluteFill}
+                        />
+                      )}
                       {isDone && <Check size={16} color="#FFFFFF" />}
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -330,9 +387,17 @@ export default function TodoScreen() {
                       style={[
                         styles.checkCircle,
                         todo.completed
-                          ? { backgroundColor: mainTheme, borderColor: mainTheme }
+                          ? { backgroundColor: gradientMode ? 'transparent' : mainTheme, borderColor: mainTheme }
                           : { borderColor: cardSubTextColor },
                       ]}>
+                      {todo.completed && gradientMode && (
+                        <LinearGradient
+                          colors={[mainTheme, mainThemeEnd || mainTheme]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={StyleSheet.absoluteFill}
+                        />
+                      )}
                       {todo.completed && <Check size={16} color="#FFFFFF" />}
                     </TouchableOpacity>
 
@@ -740,6 +805,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   deleteRoutineBtn: {
     padding: 4,

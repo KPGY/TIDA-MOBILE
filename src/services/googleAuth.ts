@@ -33,12 +33,20 @@ export interface GoogleTokens {
 type SessionExpiredListener = () => void;
 const sessionExpiredListeners = new Set<SessionExpiredListener>();
 
+let sessionExpiredNotified = false;
+
+export function resetSessionExpiredFlag(): void {
+  sessionExpiredNotified = false;
+}
+
 export function onSessionExpired(listener: SessionExpiredListener): () => void {
   sessionExpiredListeners.add(listener);
   return () => sessionExpiredListeners.delete(listener);
 }
 
 export function notifySessionExpired(): void {
+  if (sessionExpiredNotified) return;
+  sessionExpiredNotified = true;
   sessionExpiredListeners.forEach((listener) => {
     try {
       listener();
@@ -162,6 +170,7 @@ export async function getValidAccessToken(): Promise<string | null> {
   const now = Date.now();
   // 만료 1분 이상 남아 있으면 현재 토큰 바로 사용
   if (tokens.expiresAt && tokens.expiresAt - now > 60 * 1000) {
+    sessionExpiredNotified = false;
     return tokens.accessToken;
   }
 
@@ -187,6 +196,7 @@ export async function getValidAccessToken(): Promise<string | null> {
           expiresAt: Date.now() + (refreshData.expires_in || 3600) * 1000,
         };
         await AsyncStorage.setItem(STORAGE_KEYS.TOKENS, JSON.stringify(newTokens));
+        sessionExpiredNotified = false;
         return newTokens.accessToken;
       }
 
@@ -272,6 +282,7 @@ export async function trySilentReauth(): Promise<string | null> {
         await AsyncStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
       } catch (_) {}
 
+      sessionExpiredNotified = false;
       console.log('[GoogleAuth] Silent re-auth succeeded');
       return newTokens.accessToken;
     }
@@ -398,6 +409,7 @@ export async function signInWithGoogle(): Promise<{
     const user = await fetchGoogleUserInfo(tokenResult.accessToken);
     await AsyncStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
 
+    sessionExpiredNotified = false;
     return { success: true, user };
   } catch (error: any) {
     // 에러 시에도 혹시 열려있는 브라우저 닫기
@@ -415,6 +427,7 @@ export async function signInWithGoogle(): Promise<{
  * 구글 로그아웃 (로컬 저장소 정리 및 토큰 해제)
  */
 export async function signOutGoogle(): Promise<void> {
+  sessionExpiredNotified = false;
   try {
     const tokens = await getStoredTokens();
     if (tokens?.accessToken) {

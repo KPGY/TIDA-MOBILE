@@ -15,6 +15,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAppStore } from '@/store/store';
 import { hexToRgba } from '@/utils/colorHelper';
 import type { ComponentProps } from 'react';
@@ -23,7 +24,7 @@ import { Tabs } from 'expo-router';
 export type FluidTabBarProps = NonNullable<ComponentProps<typeof Tabs>['tabBar']> extends (props: infer P) => any ? P : any;
 
 export function FluidTabBar({ state, descriptors, navigation }: FluidTabBarProps) {
-  const { mainTheme, panelTheme, panelTextMode } = useAppStore();
+  const { mainTheme, mainThemeEnd, panelTheme, panelTextMode, gradientMode } = useAppStore();
   const isDark = panelTextMode === 'light';
   const insets = useSafeAreaInsets();
 
@@ -134,13 +135,25 @@ export function FluidTabBar({ state, descriptors, navigation }: FluidTabBarProps
             {
               width: pillWidth,
               left: pillPadding,
-              backgroundColor: hexToRgba(mainTheme, isDark ? 0.22 : 0.14),
+              backgroundColor: gradientMode ? 'transparent' : hexToRgba(mainTheme, isDark ? 0.22 : 0.14),
               borderColor: hexToRgba(mainTheme, isDark ? 0.45 : 0.3),
               shadowColor: mainTheme,
+              overflow: 'hidden',
             },
             dropletAnimatedStyle,
-          ]}
-        />
+          ]}>
+          {gradientMode && (
+            <LinearGradient
+              colors={[
+                hexToRgba(mainTheme, isDark ? 0.32 : 0.22),
+                hexToRgba(mainThemeEnd || mainTheme, isDark ? 0.32 : 0.22),
+              ]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
+        </Animated.View>
 
         {/* 
           각 탭 아이템: 순수 터치 방식의 독립적 Pressable 적용

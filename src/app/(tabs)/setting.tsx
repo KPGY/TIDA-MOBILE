@@ -323,6 +323,7 @@ export default function SettingScreen() {
       if (result.success && result.user) {
         setGoogleUser(result.user);
         performImmediateSync(); // 연동 즉시 백그라운드 동기화 1회 실행
+        showAlert('로그인 완료', 'Google 계정으로 성공적으로 연동되었습니다 ✨');
       } else if (!result.cancelled && result.error) {
         showAlert('로그인 실패', result.error);
       }

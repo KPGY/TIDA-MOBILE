@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import React, { useMemo, useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, AppState } from 'react-native';
 import { Flame, CheckCircle2, Award, Calendar, TrendingUp } from 'lucide-react-native';
 import { useAppStore } from '@/store/store';
 import { hexToRgba } from '@/utils/colorHelper';
@@ -15,6 +15,51 @@ import {
 export default function StatsScreen() {
   const { bgTheme, panelTheme, mainTheme, bgTextMode, panelTextMode, glassmorphismMode, routines, todos } = useAppStore();
 
+  const [todayStr, setTodayStr] = useState<string>(getTodayStr());
+
+  // 12시(자정) 넘었을 때 통계 일자 자동 갱신
+  useEffect(() => {
+    const checkMidnight = () => {
+      const current = getTodayStr();
+      setTodayStr((prev) => (prev !== current ? current : prev));
+    };
+
+    const setupMidnightTimer = () => {
+      const now = new Date();
+      const nextMidnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        1,
+      );
+      const delay = Math.max(1000, nextMidnight.getTime() - now.getTime());
+      return setTimeout(() => {
+        checkMidnight();
+        timerRef.current = setupMidnightTimer();
+      }, delay);
+    };
+
+    const timerRef = { current: setupMidnightTimer() };
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        checkMidnight();
+        clearTimeout(timerRef.current);
+        timerRef.current = setupMidnightTimer();
+      }
+    });
+
+    const interval = setInterval(checkMidnight, 30000);
+
+    return () => {
+      clearTimeout(timerRef.current);
+      clearInterval(interval);
+      appStateSub.remove();
+    };
+  }, []);
+
   const isBgDark = bgTextMode === 'light';
   const textColor = isBgDark ? '#F8FAFC' : '#0F172A';
   const subTextColor = isBgDark ? '#94A3B8' : '#64748B';
@@ -23,8 +68,6 @@ export default function StatsScreen() {
   const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
   const cardBg = glassmorphismMode ? hexToRgba(panelTheme, 0.85) : panelTheme;
-
-  const todayStr = getTodayStr();
 
   // Statistics calculations
   const stats = useMemo(() => {
