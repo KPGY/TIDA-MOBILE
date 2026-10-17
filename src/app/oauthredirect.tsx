@@ -1,7 +1,7 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
+import { useEffect } from 'react';
+import { StyleSheet, View } from 'react-native';
 
 // 브라우저 리다이렉트 세션 완료 처리
 WebBrowser.maybeCompleteAuthSession();

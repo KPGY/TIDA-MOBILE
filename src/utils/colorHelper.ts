@@ -90,8 +90,8 @@ export function getAdaptiveBubbleTextMode(
   isGlassmorphism: boolean,
 ): 'light' | 'dark' {
   if (isGlassmorphism) {
-    // With glassmorphism, bubbles have approx 0.70 opacity over bgTheme
-    const perceivedColor = blendColors(bubbleTheme, 0.70, bgTheme);
+    // With glassmorphism, bubbles have approx 0.58 opacity over bgTheme
+    const perceivedColor = blendColors(bubbleTheme, 0.58, bgTheme);
     return getContrastMode(perceivedColor);
   }
   return getContrastMode(bubbleTheme);
@@ -108,8 +108,8 @@ export function getAdaptivePanelTextMode(
   isGlassmorphism: boolean,
 ): 'light' | 'dark' {
   if (isGlassmorphism) {
-    // With glassmorphism, panels have approx 0.65 opacity over bgTheme
-    const perceivedColor = blendColors(panelTheme, 0.65, bgTheme);
+    // With glassmorphism, panels have approx 0.52 opacity over bgTheme
+    const perceivedColor = blendColors(panelTheme, 0.52, bgTheme);
     return getContrastMode(perceivedColor);
   }
   return getContrastMode(panelTheme);

@@ -35,6 +35,8 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAppStore } from '@/store/store';
 import { hexToRgba } from '@/utils/colorHelper';
 import { AppBackground } from '@/components/AppBackground';
@@ -412,19 +414,28 @@ export default function TimelineScreen() {
   const bubbleTextColor = isBubbleDark ? '#FFFFFF' : '#0F172A';
   const bubbleSubTextColor = isBubbleDark ? 'rgba(255,255,255,0.78)' : 'rgba(15,23,42,0.65)';
 
+  const insets = useSafeAreaInsets();
+
   const isPanelDark = panelTextMode === 'light';
   const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
 
-  const cardBgAlpha = glassmorphismMode ? 0.65 : 1;
-  const bubbleBgAlpha = glassmorphismMode ? 0.70 : 1;
+  const cardBgAlpha = glassmorphismMode ? 0.52 : 1;
+  const bubbleBgAlpha = glassmorphismMode ? 0.58 : 1;
   const cardBg = glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme;
   const bubbleBg = glassmorphismMode ? hexToRgba(bubbleTheme, bubbleBgAlpha) : bubbleTheme;
   const cardBorder = glassmorphismMode
     ? isPanelDark
-      ? 'rgba(255,255,255,0.2)'
-      : 'rgba(0,0,0,0.08)'
-    : 'rgba(0,0,0,0.06)';
+      ? 'rgba(255,255,255,0.28)'
+      : 'rgba(255,255,255,0.75)'
+    : isPanelDark
+      ? 'rgba(255,255,255,0.1)'
+      : 'rgba(0,0,0,0.06)';
+  const bubbleBorder = glassmorphismMode
+    ? isBubbleDark
+      ? 'rgba(255,255,255,0.32)'
+      : 'rgba(255,255,255,0.75)'
+    : undefined;
 
   const { width: windowWidth } = useWindowDimensions();
   // 양쪽 패딩(28px) + 시간 뱃지(~54px) + 삭제 버튼(~26px) + 안전 여백(18px) = 126 제외하여 우측 프레임 밖 튀어나감 완전 방지
@@ -435,8 +446,7 @@ export default function TimelineScreen() {
   const [contentHeight, setContentHeight] = useState<number>(0);
   const isBottomOrder = messageOrder === 'bottom';
 
-  // 각 항목의 실제 높이를 계산하여(사진: 220px, 텍스트 줄수 기반), 메시지가 화면을 채우지 않을 때
-  // 카카오톡처럼 입력창 바로 위(하단)부터 자연스럽게 쌓이도록 판별
+  // 각 항목의 실제 높이를 추정 계산 (사진: 220px, 텍스트 줄수 기반)
   const contentWeight = entries.reduce((acc, item) => {
     let attCount = 0;
     if (item.attachmentsJson) {
@@ -448,18 +458,32 @@ export default function TimelineScreen() {
     const lineBreaks = item.content ? item.content.split('\n').length : 0;
     const charLines = item.content ? Math.ceil(item.content.length / 18) : 0;
     const textLines = Math.max(lineBreaks, charLines);
-    const itemHeight = Math.max(42, textLines * 22 + 20) + (attCount * 220) + 12;
+    const itemHeight = Math.max(42, textLines * 22 + 20) + attCount * 220 + 12;
     return acc + itemHeight;
   }, 0);
 
-  // 타임라인 순서(최신순/시간순)와 상관없이, 메시지가 화면 높이를 다 채우지 못할 때는
-  // 항상 카카오톡처럼 화면 하단(입력창 바로 위)에 메시지가 착 붙어있도록 처리
-  const isContentShort =
-    contentHeight > 0
-      ? contentHeight < (listHeight ? listHeight - 20 : 550)
-      : contentWeight < (listHeight ? listHeight - 40 : 550);
+  const effectiveHeight = contentHeight > 0 ? contentHeight : contentWeight;
 
-  const shouldAlignBottom = !isSearching && entries.length > 0 && isContentShort;
+  // 카카오톡처럼 메시지가 화면 높이를 다 채우지 못할 때 상단에 여백 스페이서를 두어
+  // 메시지들이 화면 하단(입력창 바로 위)에 자연스럽게 착 달라붙어 시작되도록 처리
+  const isContentShort = effectiveHeight < (listHeight ? listHeight - 20 : 550);
+  const topSpacerHeight =
+    !isSearching && messageOrder === 'bottom' && entries.length > 0 && isContentShort && listHeight > 0
+      ? Math.max(0, listHeight - effectiveHeight - 36)
+      : 0;
+
+  // 최신 메시지 위치로 스크롤 (카카오톡 방식)
+  const scrollToLatest = useCallback(
+    (animated = false) => {
+      if (!flatListRef.current || entries.length === 0 || isSearching) return;
+      if (messageOrder === 'bottom') {
+        flatListRef.current.scrollToEnd({ animated });
+      } else {
+        flatListRef.current.scrollToOffset({ offset: 0, animated });
+      }
+    },
+    [entries.length, isSearching, messageOrder]
+  );
 
   // Load entries for current date
   const loadEntries = useCallback(() => {
@@ -484,22 +508,14 @@ export default function TimelineScreen() {
   // 날짜 변경 또는 초기 로드 시 카톡처럼 최신 메시지 위치로 자동 이동
   useEffect(() => {
     if (entries.length > 0) {
-      const timer = setTimeout(() => {
-        // [중요] 메시지가 화면 높이를 다 채우지 않을 때는 이미 flex-end로 하단에 붙어있으므로
-        // scrollToEnd를 부르면 flex-end와 오프셋 충돌이 일어나 화면 밖으로 밀려 공란이 되는 현상 방지
-        if (shouldAlignBottom) return;
-
-        if (messageOrder === 'bottom') {
-          // 시간순(아래): 최신글이 맨 아래에 있으므로 아래로 스크롤
-          flatListRef.current?.scrollToEnd({ animated: false });
-        } else {
-          // 최신순(위): 최신글이 맨 위에 있으므로 맨 위(offset 0)로 스크롤
-          flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
-        }
-      }, 80);
-      return () => clearTimeout(timer);
+      const t1 = setTimeout(() => scrollToLatest(false), 50);
+      const t2 = setTimeout(() => scrollToLatest(false), 150);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
     }
-  }, [currentDate, messageOrder, entries.length, shouldAlignBottom]);
+  }, [currentDate, messageOrder, entries.length, scrollToLatest]);
 
   // 탭 포커스 시 최신 일기 자동 리로드
   useFocusEffect(
@@ -521,17 +537,11 @@ export default function TimelineScreen() {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const sub = Keyboard.addListener(showEvent, () => {
       setTimeout(() => {
-        if (entries.length > 0 && flatListRef.current) {
-          if (messageOrder === 'bottom') {
-            flatListRef.current.scrollToEnd({ animated: true });
-          } else {
-            flatListRef.current.scrollToOffset({ offset: 0, animated: true });
-          }
-        }
+        scrollToLatest(true);
       }, 100);
     });
     return () => sub.remove();
-  }, [entries.length, messageOrder]);
+  }, [scrollToLatest]);
 
   // Date Navigation
   const changeDate = (offset: number) => {
@@ -653,14 +663,8 @@ export default function TimelineScreen() {
       }
       loadEntries();
       setTimeout(() => {
-        if (flatListRef.current && !shouldAlignBottom) {
-          if (messageOrder === 'bottom') {
-            flatListRef.current.scrollToEnd({ animated: true });
-          } else {
-            flatListRef.current.scrollToOffset({ offset: 0, animated: true });
-          }
-        }
-      }, 100);
+        scrollToLatest(true);
+      }, 80);
     } catch (e) {
       showAlert('저장 실패', '메모를 저장하지 못했습니다.');
     }
@@ -752,7 +756,7 @@ export default function TimelineScreen() {
           style={[
             styles.speechBubble,
             !gradientMode && { backgroundColor: bubbleBg },
-            glassmorphismMode && styles.glassBubble,
+            glassmorphismMode && [styles.glassBubble, { borderColor: bubbleBorder }],
             isImageOnly && styles.imageOnlyBubble,
             { maxWidth: maxBubbleWidth },
           ]}>
@@ -767,6 +771,19 @@ export default function TimelineScreen() {
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={StyleSheet.absoluteFill}
+            />
+          )}
+          {glassmorphismMode && (
+            <LinearGradient
+              colors={
+                isBubbleDark
+                  ? ['rgba(255, 255, 255, 0.16)', 'rgba(255, 255, 255, 0.02)']
+                  : ['rgba(255, 255, 255, 0.45)', 'rgba(255, 255, 255, 0.08)']
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 0, y: 1 }}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
             />
           )}
 
@@ -810,17 +827,21 @@ export default function TimelineScreen() {
   const isToday = currentDate === getTodayStr();
 
   return (
-    <AppBackground style={styles.container}>
+    <AppBackground style={styles.container} edges={['left', 'right']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}>
-        {/* Top Header & Date Navigation */}
+        {/* Top Header & Date Navigation (상단바 영역까지 자연스럽게 감싸도록 처리) */}
         <View
           style={[
             styles.header,
+            {
+              paddingTop: Math.max(insets.top, 8) + 6,
+              borderBottomColor: cardBorder,
+              overflow: 'hidden',
+            },
             !gradientMode && { backgroundColor: cardBg },
-            { borderBottomColor: cardBorder, overflow: 'hidden' },
           ]}>
           {gradientMode && (
             <LinearGradient
@@ -833,6 +854,19 @@ export default function TimelineScreen() {
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={StyleSheet.absoluteFill}
+            />
+          )}
+          {glassmorphismMode && (
+            <LinearGradient
+              colors={
+                isPanelDark
+                  ? ['rgba(255, 255, 255, 0.12)', 'rgba(255, 255, 255, 0.02)']
+                  : ['rgba(255, 255, 255, 0.35)', 'rgba(255, 255, 255, 0.05)']
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 0, y: 1 }}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
             />
           )}
           {isSearching ? (
@@ -936,12 +970,25 @@ export default function TimelineScreen() {
           data={isSearching ? searchResults : entries}
           keyExtractor={(item) => String(item.id)}
           renderItem={renderDiaryItem}
-          onLayout={(e) => setListHeight(e.nativeEvent.layout.height)}
-          onContentSizeChange={(_w, h) => setContentHeight(h)}
+          ListHeaderComponent={
+            topSpacerHeight > 0 ? <View style={{ height: topSpacerHeight }} /> : null
+          }
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            setListHeight(h);
+            if (messageOrder === 'bottom' && !isSearching) {
+              scrollToLatest(false);
+            }
+          }}
+          onContentSizeChange={(_w, h) => {
+            setContentHeight(h);
+            if (messageOrder === 'bottom' && !isSearching) {
+              scrollToLatest(false);
+            }
+          }}
           contentContainerStyle={[
             styles.listContent,
             { flexGrow: 1 },
-            shouldAlignBottom && { justifyContent: 'flex-end' },
           ]}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
@@ -984,6 +1031,19 @@ export default function TimelineScreen() {
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={StyleSheet.absoluteFill}
+              />
+            )}
+            {glassmorphismMode && (
+              <LinearGradient
+                colors={
+                  isPanelDark
+                    ? ['rgba(255, 255, 255, 0.10)', 'rgba(255, 255, 255, 0.02)']
+                    : ['rgba(255, 255, 255, 0.35)', 'rgba(255, 255, 255, 0.05)']
+                }
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
               />
             )}
             <ScrollView
@@ -1046,6 +1106,19 @@ export default function TimelineScreen() {
                 style={StyleSheet.absoluteFill}
               />
             )}
+            {glassmorphismMode && (
+              <LinearGradient
+                colors={
+                  isPanelDark
+                    ? ['rgba(255, 255, 255, 0.10)', 'rgba(255, 255, 255, 0.02)']
+                    : ['rgba(255, 255, 255, 0.35)', 'rgba(255, 255, 255, 0.05)']
+                }
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+              />
+            )}
             <TouchableOpacity onPress={handlePickImage} style={styles.iconBtn}>
               <ImageIcon
                 size={22}
@@ -1066,26 +1139,39 @@ export default function TimelineScreen() {
             <TouchableOpacity
               onPress={handleSend}
               disabled={!inputText.trim() && selectedImages.length === 0}
-              style={[
-                styles.sendBtn,
-                !gradientMode && {
-                  backgroundColor:
-                    inputText.trim() || selectedImages.length > 0
-                      ? mainTheme
-                      : isPanelDark
-                        ? '#334155'
-                        : '#CBD5E1',
-                },
-              ]}>
-              {gradientMode && (inputText.trim() || selectedImages.length > 0) && (
-                <LinearGradient
-                  colors={[mainTheme, mainThemeEnd || mainTheme]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={StyleSheet.absoluteFill}
-                />
+              style={styles.sendBtn}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              {inputText.trim() || selectedImages.length > 0 ? (
+                gradientMode ? (
+                  <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+                    <Defs>
+                      <SvgGradient id="sendIconGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <Stop offset="0%" stopColor={mainTheme} />
+                        <Stop offset="100%" stopColor={mainThemeEnd || mainTheme} />
+                      </SvgGradient>
+                    </Defs>
+                    <Path
+                      d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"
+                      stroke="url(#sendIconGrad)"
+                      strokeWidth={2.3}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <Path
+                      d="m21.854 2.147-10.94 10.939"
+                      stroke="url(#sendIconGrad)"
+                      strokeWidth={2.3}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </Svg>
+                ) : (
+                  <Send size={22} color={mainTheme} strokeWidth={2.3} />
+                )
+              ) : (
+                <Send size={22} color={isPanelDark ? '#475569' : '#94A3B8'} strokeWidth={2.3} />
               )}
-              <Send size={18} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
         )}
@@ -1134,7 +1220,7 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0,0,0,0.06)',
   },
@@ -1242,8 +1328,12 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   glassBubble: {
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.22)',
+    borderWidth: 1.2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
   },
   imageOnlyBubble: {
     padding: 4,
@@ -1353,9 +1443,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    padding: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },

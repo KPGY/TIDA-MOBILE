@@ -112,12 +112,12 @@ export function FluidTabBar({ state, descriptors, navigation }: FluidTabBarProps
 
   const inactiveColor = isDark ? '#94A3B8' : '#64748B';
 
-  const barBgAlpha = glassmorphismMode ? 0.70 : 1;
+  const barBgAlpha = glassmorphismMode ? 0.52 : 1;
   const barBg = glassmorphismMode ? hexToRgba(panelTheme, barBgAlpha) : panelTheme;
   const barBorder = glassmorphismMode
     ? isDark
-      ? 'rgba(255,255,255,0.2)'
-      : 'rgba(0,0,0,0.08)'
+      ? 'rgba(255, 255, 255, 0.28)'
+      : 'rgba(255, 255, 255, 0.75)'
     : isDark
       ? '#334155'
       : '#E2E8F0';
@@ -144,6 +144,19 @@ export function FluidTabBar({ state, descriptors, navigation }: FluidTabBarProps
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
+        />
+      )}
+      {glassmorphismMode && (
+        <LinearGradient
+          colors={
+            isDark
+              ? ['rgba(255, 255, 255, 0.12)', 'rgba(255, 255, 255, 0.02)']
+              : ['rgba(255, 255, 255, 0.38)', 'rgba(255, 255, 255, 0.06)']
+          }
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
         />
       )}
       {/* 

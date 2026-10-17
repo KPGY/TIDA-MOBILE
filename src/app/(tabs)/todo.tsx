@@ -129,28 +129,46 @@ export default function TodoScreen() {
   const cardTextColor = isPanelDark ? '#F8FAFC' : '#0F172A';
   const cardSubTextColor = isPanelDark ? '#94A3B8' : '#64748B';
 
-  const cardBgAlpha = glassmorphismMode ? 0.65 : 1;
+  const cardBgAlpha = glassmorphismMode ? 0.52 : 1;
   const cardBg = glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme;
   const cardBorder = glassmorphismMode
     ? isPanelDark
-      ? 'rgba(255,255,255,0.2)'
-      : 'rgba(0,0,0,0.08)'
-    : 'transparent';
+      ? 'rgba(255,255,255,0.28)'
+      : 'rgba(255,255,255,0.75)'
+    : isPanelDark
+      ? 'rgba(255,255,255,0.1)'
+      : 'rgba(0,0,0,0.06)';
 
-  const renderCardGradient = (borderRadius?: number) =>
-    gradientMode ? (
-      <LinearGradient
-        colors={[
-          glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
-          glassmorphismMode
-            ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
-            : (panelThemeEnd || panelTheme),
-        ]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[StyleSheet.absoluteFill, borderRadius !== undefined ? { borderRadius } : null]}
-      />
-    ) : null;
+  const renderCardGradient = (borderRadius?: number) => (
+    <>
+      {gradientMode && (
+        <LinearGradient
+          colors={[
+            glassmorphismMode ? hexToRgba(panelTheme, cardBgAlpha) : panelTheme,
+            glassmorphismMode
+              ? hexToRgba(panelThemeEnd || panelTheme, cardBgAlpha)
+              : (panelThemeEnd || panelTheme),
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[StyleSheet.absoluteFill, borderRadius !== undefined ? { borderRadius } : null]}
+        />
+      )}
+      {glassmorphismMode && (
+        <LinearGradient
+          colors={
+            isPanelDark
+              ? ['rgba(255, 255, 255, 0.12)', 'rgba(255, 255, 255, 0.02)']
+              : ['rgba(255, 255, 255, 0.38)', 'rgba(255, 255, 255, 0.06)']
+          }
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={[StyleSheet.absoluteFill, borderRadius !== undefined ? { borderRadius } : null]}
+          pointerEvents="none"
+        />
+      )}
+    </>
+  );
 
   // Toggle todo with haptic feedback
   const handleToggleTodo = (id: string) => {
@@ -801,7 +819,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   glassCard: {
-    borderWidth: 1,
+    borderWidth: 1.2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 5,
+    elevation: 3,
   },
   emptyCardText: {
     fontSize: 14,
